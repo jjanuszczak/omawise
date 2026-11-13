@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=Readwise Reader
+Comment=Read and organize your Readwise library
+Exec=rwreader
+Icon=rwreader
+Terminal=false
+Type=Application
+Categories=Office;Education;Network;
+StartupWMClass=rwreader

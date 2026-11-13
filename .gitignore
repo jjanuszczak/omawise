@@ -1,0 +1,11 @@
+/build/
+/pkg/
+/*.pkg.tar
+/*.pkg.tar.zst
+*.user
+*.swp
+*.o
+*.moc
+moc_*.cpp
+qrc_*.cpp
+.qmake.stash

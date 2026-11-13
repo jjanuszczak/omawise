@@ -1,0 +1,79 @@
+#pragma once
+
+#include <QProcess>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QObject>
+#include <QVariantList>
+#include <QTimer>
+
+class Backend : public QObject {
+    Q_OBJECT
+    Q_PROPERTY(QVariantList documents READ documents NOTIFY documentsChanged)
+    Q_PROPERTY(bool busy READ busy NOTIFY busyChanged)
+    Q_PROPERTY(QString error READ error NOTIFY errorChanged)
+    Q_PROPERTY(QString status READ status NOTIFY statusChanged)
+    Q_PROPERTY(QString selectedTitle READ selectedTitle NOTIFY selectedDocumentChanged)
+    Q_PROPERTY(QString selectedAuthor READ selectedAuthor NOTIFY selectedDocumentChanged)
+    Q_PROPERTY(QString selectedContent READ selectedContent NOTIFY selectedDocumentChanged)
+    Q_PROPERTY(QString selectedUrl READ selectedUrl NOTIFY selectedDocumentChanged)
+    Q_PROPERTY(QString location READ location NOTIFY locationChanged)
+
+public:
+    explicit Backend(QObject *parent = nullptr);
+
+    QVariantList documents() const { return m_documents; }
+    bool busy() const { return m_busy; }
+    QString error() const { return m_error; }
+    QString status() const { return m_status; }
+    QString selectedTitle() const { return m_selectedTitle; }
+    QString selectedAuthor() const { return m_selectedAuthor; }
+    QString selectedContent() const { return m_selectedContent; }
+    QString selectedUrl() const { return m_selectedUrl; }
+    QString location() const { return m_location; }
+
+    Q_INVOKABLE void refresh();
+    Q_INVOKABLE void setLocation(const QString &location);
+    Q_INVOKABLE void search(const QString &query);
+    Q_INVOKABLE void openDocument(const QString &id, const QString &title, const QString &author, const QString &url);
+    Q_INVOKABLE void archiveDocument(const QString &id);
+    Q_INVOKABLE void login();
+    Q_INVOKABLE void clearError();
+    Q_INVOKABLE QString formattedMarkdown(const QString &markdown, const QString &accent) const;
+
+signals:
+    void documentsChanged();
+    void busyChanged();
+    void errorChanged();
+    void statusChanged();
+    void selectedDocumentChanged();
+    void locationChanged();
+
+private:
+    enum class Operation { None, List, Search, Detail, Archive, Login };
+    void run(const QStringList &arguments, Operation operation);
+    void finish(int exitCode, QProcess::ExitStatus exitStatus);
+    void fail(const QString &message);
+    void setBusy(bool busy);
+    void setStatus(const QString &status);
+    static QVariantList resultRows(const QJsonDocument &document);
+    static QJsonObject unwrapObject(const QJsonDocument &document);
+
+    QProcess m_process;
+    QTimer m_timeout;
+    Operation m_operation = Operation::None;
+    QVariantList m_documents;
+    QVariantList m_libraryDocuments;
+    QVariantList m_localSearchMatches;
+    bool m_busy = false;
+    bool m_timedOut = false;
+    QString m_error;
+    QString m_status;
+    QString m_selectedTitle;
+    QString m_selectedAuthor;
+    QString m_selectedContent;
+    QString m_selectedUrl;
+    QString m_location = "new";
+    QString m_activeQuery;
+    QString m_pendingId;
+};
