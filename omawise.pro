@@ -1,5 +1,6 @@
-QT += core gui qml quick quickcontrols2 dbus
-CONFIG += c++17 release
+QT += core gui qml quick quickcontrols2 dbus network
+CONFIG += c++17 release link_pkgconfig
+PKGCONFIG += libsecret-1
 TARGET = omawise
 TEMPLATE = app
 

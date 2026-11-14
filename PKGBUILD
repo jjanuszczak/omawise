@@ -6,9 +6,10 @@ arch=('x86_64')
 url='https://readwise.io/read'
 license=('MIT')
 options=('!debug')
-depends=('qt6-base' 'qt6-declarative' 'qt6-svg' 'qt6-wayland')
-optdepends=('npm: install the official @readwise/cli required by Omawise')
-makedepends=('base-devel' 'qt6-base' 'qt6-declarative' 'qt6-svg')
+depends=('qt6-base' 'qt6-declarative' 'qt6-svg' 'qt6-wayland' 'libsecret')
+optdepends=('gnome-keyring: Secret Service provider for secure Readwise token storage'
+            'npm: install the official @readwise/cli required for hybrid search and annotation operations')
+makedepends=('base-devel' 'qt6-base' 'qt6-declarative' 'qt6-svg' 'libsecret')
 source=()
 sha256sums=()
 
