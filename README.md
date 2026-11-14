@@ -1,3 +1,11 @@
+<div align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/jjanuszczak/omawise/main/marketing/omawise-logo.svg">
+    <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/jjanuszczak/omawise/main/marketing/omawise-logo-light.svg">
+    <img alt="Omawise — Readwise Reader for Omarchy" src="https://raw.githubusercontent.com/jjanuszczak/omawise/main/marketing/omawise-logo-light.svg" width="520">
+  </picture>
+</div>
+
 # Omawise
 
 Omawise is an early native Qt Quick client for Readwise Reader on Omarchy. This Phase 1 vertical slice lists Reader documents, searches the library, opens Markdown document details, and archives the selected document through the official Readwise CLI.
