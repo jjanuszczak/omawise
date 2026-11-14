@@ -8,9 +8,9 @@
 
 # Omawise
 
-Omawise is an early native Qt Quick client for Readwise Reader on Omarchy. This Phase 1 vertical slice lists Reader documents, searches the library, opens Markdown document details, and archives the selected document through the official Readwise CLI.
+Omawise is an early, keyboard-first desktop companion for Readwise Reader, built with Qt Quick for Omarchy. Browse Inbox, Later, Shortlist, Archive, and Feed; search your library; read supported articles; and manage document notes, tags, highlights, and highlight annotations. The official Readwise CLI handles account access, keeping Readwise as the source of truth without Omawise storing your token.
 
-The app does not store or handle Readwise tokens. Install and authenticate the official CLI once, then launch the client:
+For a development checkout, install and authenticate the official CLI, then launch the app:
 
 ```sh
 npm install -g @readwise/cli
@@ -18,13 +18,13 @@ readwise login
 ./bin/run
 ```
 
-Build and run the regression suite with `./bin/build`; run just the tests with `./bin/test`. The app invokes the CLI directly with `QProcess` and argument arrays (no shell), requests JSON for data commands, and surfaces CLI errors in the window. A **Sign in** action appears only after the CLI reports an authentication error.
+Build and run the regression suite with `./bin/build`; run just the tests with `./bin/test`. The app invokes the CLI directly with `QProcess` and argument arrays (no shell), requests JSON for data commands, and surfaces CLI errors in the window. A **Sign in** action appears only after the CLI reports an authentication error. Omawise does not store or handle the Readwise token.
 
 ## Build and release packages
 
-On Arch/Omarchy, `./bin/package` builds an Omawise package from the current checkout without installing it. `./bin/install` builds and installs that checkout through `makepkg` and `pacman`. For a tagged GitHub release, update `pkgver` in `PKGBUILD`, commit the change, and push the matching tag (for example, `v0.2.0`). GitHub Actions builds and checks the app in an Arch Linux environment, then attaches the `.pkg.tar.zst` package to a GitHub Release. Downloaded release packages can be installed with `sudo pacman -U ./omawise-*.pkg.tar.zst`. Releases currently target x86_64 Arch Linux and Omarchy.
+On Arch/Omarchy, install the [latest Omawise release](https://github.com/jjanuszczak/omawise/releases/latest) with `sudo pacman -U ./omawise-*.pkg.tar.zst`. `./bin/package` builds a package from a checkout without installing it; `./bin/install` builds and installs the checkout through `makepkg` and `pacman`. To publish a release, update `pkgver` in `PKGBUILD`, commit the change, and push the matching tag (for example, `v0.1.4`). GitHub Actions checks the app and attaches an x86_64 Arch package to the release.
 
-The app icon and sidebar use the vector mark in `assets/omawise-mark.svg`; a horizontal wordmark for promotional use is in `marketing/omawise-logo.svg`.
+The app icon and sidebar use the vector mark in `assets/omawise-mark.svg`; dark and light horizontal wordmarks for promotional use are in `marketing/omawise-logo.svg` and `marketing/omawise-logo-light.svg`.
 
 ## Shortcuts
 

@@ -11,7 +11,7 @@
 - Current GUI actions: list Inbox/Later/Shortlist/Archive/Feed, hybrid search, local case-insensitive matching against the currently loaded documents, inspect selected-document metadata in the library or reading view, open an article separately, edit document notes/tags and individual highlight notes/tags, create and review text highlights, archive a document, and start CLI login.
 - Search runs only after Enter, avoiding repeated CLI launches while the user types; Escape clears the query and returns to the current view.
 - Keyboard navigation: `j/k` and arrows in the focused nav/list; Enter opens/activates; `/` focuses search; `Ctrl+K` opens the command palette; `Ctrl+←/→` changes focus between navigation and document list; `Ctrl+R` refreshes; `a` archives; `?` opens help.
-- The left pane switches from library navigation to an article table of contents while reading; the article view returns to the library list through its Back button or Escape. A bottom status bar shows current operation and errors, with a compact activity spinner; list and article loading also show a large centered spinner.
+- The left pane switches from library navigation to an article table of contents while reading; the article view returns to the library list through its Back button or Escape. A bottom status bar shows current operation and errors, with a compact activity spinner; article loading shows a centered spinner while list navigation stays responsive during metadata requests.
 - `src/theme.{h,cpp}` follows Omarchy accent color and Hyprland rounding.
 - `tests/omawise_tests.cpp` contains Qt Test coverage for fake-CLI backend behavior and an offscreen QML interaction path. `bin/build` runs the suite after the application build.
 - The reading view converts CLI Markdown using `QTextDocument`, then renders selectable rich text in a centered 760 px column with styled body text, headings, lists, code, and quotes.
@@ -47,8 +47,9 @@
 - `./bin/package` creates a local Arch package from the current checkout without installing it; `./bin/install` builds and installs the checkout through `makepkg`/`pacman`. Both use `build/makepkg/` for makepkg's work directory so `--cleanbuild` cannot collide with the project's `src/` folder.
 - `.github/workflows/release.yml` runs on `v*` tags, verifies the tag equals `v<pkgver>`, builds and checks in Arch Linux, then creates a GitHub Release with the `.pkg.tar.zst` package attached.
 - To publish a release, update `pkgver` in `PKGBUILD`, commit, and push the matching tag. The package currently targets x86_64 Arch Linux/Omarchy. A user can install the downloaded asset with `sudo pacman -U ./omawise-*.pkg.tar.zst`.
+- Release `v0.1.3` is published at <https://github.com/jjanuszczak/omawise/releases/tag/v0.1.3> with `omawise-0.1.3-1-x86_64.pkg.tar.zst` attached. Its GitHub Actions build, tests, package assembly, and release upload all passed.
 
-The user has an authenticated Readwise CLI. The app uses that existing CLI login. Do not issue account calls during routine development; use a fake `readwise` executable for interaction checks unless the user explicitly asks to test against their account.
+Do not issue account calls during routine development; use a fake `readwise` executable for interaction checks unless the user explicitly asks to test against a real account.
 
 ## Verification already performed
 
@@ -56,7 +57,7 @@ The user has an authenticated Readwise CLI. The app uses that existing CLI login
 - The repository's offscreen QML interaction test uses a fake CLI and verifies search submission, keyboard document activation, the Open action, article focus and paragraph/word selection, highlight creation through the shortcut and toolbar, and inline document note/tag editing. Backend tests cover document moves and highlight note/tag commands.
 - `bin/test` sets `QT_QPA_PLATFORM=offscreen` and `QT_QPA_PLATFORMTHEME=generic` so GUI checks do not depend on the host desktop session.
 - The sign-in prompt is hidden normally and appears only when CLI error text indicates an authentication failure; it launches the official CLI OAuth flow when selected. The app does not inspect CLI credential files or handle the token.
-- The PKGBUILD keeps generated qmake output under the checkout's `build/` directory. A package was assembled from an isolated temporary copy and contains the executable, desktop entry, icon, and license; it was not installed.
+- `./bin/package --cleanbuild` succeeds locally without deleting or modifying the project's `src/` files. Release `v0.1.3` repeated the clean package build successfully in GitHub Actions; the package has not yet been installed locally.
 - A grabbed offscreen mock article confirmed the article pane is visible and Markdown headings/body/list formatting render at the intended width.
 - No authenticated Readwise account was queried during these checks.
 
@@ -68,15 +69,15 @@ The user has an authenticated Readwise CLI. The app uses that existing CLI login
 - The app is English-only. QML/C++ strings use translation wrappers, but Omarchy localization catalogs and live language switching remain unimplemented.
 - Startup, CLI spawn, detail load, and search latency have not been benchmarked against a real account.
 - The local development package has been assembled successfully, but it has not been installed or launched from the installed package.
-- The tag-based GitHub release workflow and standalone `bin/package` command have been added but have not yet run in GitHub Actions. The first release should confirm the Arch container setup and artifact upload end to end.
-- The original feature work is committed on `main` in `86d646b` (`Second commit`), and the earlier contributor-guide/handoff updates are committed in `49b8df2` (`Docs update`). Current continuation changes to search, detail parsing, QML test hooks, and packaging are uncommitted.
+- GitHub Actions reported non-blocking Node.js 20 deprecation annotations for the v4 actions and a future `ubuntu-latest` image migration; update runner/action versions when needed.
+- Current release commit `6c9dd98` (`Fix clean Arch package builds`) is on `main` and tagged `v0.1.3`.
 
 ## Suggested next steps
 
-1. Have the user relaunch with `./bin/run` and compare the same article and modal styling with Readwise Web.
-2. If typography/content differs, inspect a sanitized representative CLI detail response and decide whether more source HTML, images, or metadata is available from supported CLI/API surfaces.
-3. Validate account-backed search behavior (especially title matches beyond the loaded page) only with explicit user approval; the dedicated title-search pass is implemented but its real-account coverage is unverified.
-4. Validate highlight selection and refreshed highlight responses against real article content only with explicit account-test authorization; exact matching and PDF/EPUB anchoring have not been tested against an account.
+1. Install and launch the published package on Omarchy; verify the desktop launcher, icon, and runtime dependencies.
+2. With explicit user authorization, validate CLI response shapes, title search coverage, metadata writes, and highlight refresh behavior against a real account.
+3. Improve coverage beyond the latest 50 loaded documents with cursor pagination and reflect it in the list/search UX.
+4. Consider explicit URL capture, seen/reading-progress controls, durable local caching/offline reading, settings and shortcut customization, and dedicated PDF/EPUB viewers as future work. Keep PDF/EPUB anchoring, TTS, Ghostreader, and complete Reader parity out of current claims.
 
 ## Contributor instructions
 
