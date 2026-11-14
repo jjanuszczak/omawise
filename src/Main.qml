@@ -511,9 +511,10 @@ ApplicationWindow {
         Rectangle { Layout.fillHeight: true; width: 1; color: "#303238" }
 
         ColumnLayout {
-            Layout.preferredWidth: 410
-            Layout.minimumWidth: 320
-            Layout.fillWidth: true
+            Layout.preferredWidth: reading ? 0 : 410
+            Layout.minimumWidth: reading ? 0 : 320
+            Layout.maximumWidth: reading ? 0 : 16777215
+            Layout.fillWidth: !reading
             Layout.fillHeight: true
             spacing: 0
             visible: !reading

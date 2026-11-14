@@ -15,7 +15,7 @@ int main(int argc, char *argv[]) {
     appFont.setPointSize(12);
     app.setFont(appFont);
     app.setApplicationName("omawise");
-    app.setApplicationVersion("0.1.0");
+    app.setApplicationVersion("0.1.1");
     app.setDesktopFileName("omawise");
     app.setWindowIcon(QIcon::fromTheme("omawise"));
     QQuickStyle::setStyle("Material");
