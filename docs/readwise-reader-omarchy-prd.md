@@ -88,17 +88,17 @@ The official CLI gives agents direct access to Reader and Readwise data, and Rea
 
 Use **C++ and Qt Quick/QML**, following Omarchy’s app pattern: C++ owns state, processes, network work, and failures; QML owns layout and interaction. Package it as an Arch app with a launcher entry. Follow the theme live and use Omarchy’s language setting. The Omarchy app conventions also call for application shortcuts, live theme handling, an agent-facing CLI, and a bundled skill.
 
-### Readwise integration: CLI first, API as a measured fallback
+### Readwise integration: direct API reads with CLI fallback for uncovered operations
 
-Phase 0 confirmed the official CLI has commands for the first reading workflow and provides JSON output and OAuth login. The Phase 1 vertical slice therefore uses it as the GUI adapter while it is also the user’s agent interface.
+Phase 0 confirmed the official CLI has commands for the first reading workflow and provides JSON output and OAuth login. Later account benchmarks showed direct API list/detail reads were materially faster, so Omawise uses the Reader API for those paths when the user connects an access token and falls back to the CLI otherwise.
 
 Reasons:
 
-- It owns its supported login and credential flow, so the app doesn’t need to collect or store a Readwise token in the initial slice.
-- It covers list, search, detail, move, highlight, tag, and export operations and can return machine-readable JSON.
-- It keeps the desktop app and local agents on the same supported Readwise surface.
+- The CLI continues to own login for its search and annotation/write operations.
+- Direct API reads use an explicitly entered access token, validate it through the documented auth endpoint, and store it in the desktop Secret Service keyring.
+- Direct API list/detail calls were about four to five times faster in a five-run account comparison. Search and highlight operations remain CLI-backed where no documented direct API path was verified.
 
-Invoke a fixed allowlist asynchronously through `QProcess`, never a shell, and never pass credentials in arguments. Keep the command adapter behind a repository interface. Benchmark cold and warm startup and validate JSON response shapes against a test account before treating the CLI as a permanent internal contract; add a direct API adapter only if latency or capability requires it. The API documents pagination, per-endpoint limits, and `429` handling. [Reader API](https://readwise.io/reader_api), [Readwise CLI docs](https://docs.readwise.io/tools/cli)
+Invoke the CLI asynchronously through `QProcess` with argument arrays, never a shell, and never pass credentials in arguments. Use `QNetworkAccessManager` for direct API requests and keep the token in Secret Service through libsecret. The API documents pagination, endpoint-specific limits, and `429` handling. [Reader API](https://readwise.io/reader_api), [Readwise CLI docs](https://docs.readwise.io/tools/cli)
 
 ### Local storage and sync
 

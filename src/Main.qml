@@ -250,6 +250,8 @@ ApplicationWindow {
             if (doc.id) backend.archiveDocument(doc.id)
         } else if (command === "help") showHelp = true
         else if (command === "login") backend.login()
+        else if (command === "connectApi") apiTokenDialog.open()
+        else if (command === "forgetApi") backend.forgetApiToken()
         else if (command === "back") returnToLibrary()
     }
 
@@ -319,6 +321,12 @@ ApplicationWindow {
         }
         function onSelectedDocumentChanged() {
             documentNoteEditor.text = backend.selectedNote
+        }
+        function onApiTokenStateChanged() {
+            if (backend.apiTokenAvailable) {
+                apiTokenField.clear()
+                apiTokenDialog.close()
+            }
         }
     }
 
@@ -490,6 +498,36 @@ ApplicationWindow {
                 Rectangle { Layout.fillWidth: true; height: 1; color: "#34373c" }
                 Text { text: reading ? qsTr("↑/↓ paragraph · H highlight · select with Shift+Arrow") : qsTr("j/k move · Enter open · Tab changes pane · ? shortcuts"); color: "#93978f"; font.family: theme.uiFont; font.pixelSize: 9; wrapMode: Text.Wrap; Layout.fillWidth: true }
                 Rectangle {
+                    visible: backend.apiTokenReady && !backend.apiTokenAvailable
+                    Layout.fillWidth: true
+                    implicitHeight: apiConnectPrompt.implicitHeight + 18
+                    color: "#272a2f"
+                    border.color: backend.needsApiToken ? "#8b5149" : "#41483d"
+                    radius: Math.min(2, theme.radius)
+                    ColumnLayout {
+                        id: apiConnectPrompt
+                        anchors.fill: parent
+                        anchors.margins: 9
+                        spacing: 7
+                        Text {
+                            text: backend.needsApiToken
+                                  ? qsTr("The saved API token was rejected.")
+                                  : qsTr("Connect the direct API for faster lists and article loading.")
+                            color: "#e4dfce"; font.family: theme.uiFont; font.pixelSize: 10
+                            wrapMode: Text.Wrap; Layout.fillWidth: true
+                        }
+                        Button {
+                            Material.roundedScale: Material.NotRounded
+                            font.family: theme.uiFont
+                            text: qsTr("Connect API token")
+                            objectName: "connectApiTokenButton"
+                            Layout.fillWidth: true
+                            enabled: !backend.busy && !backend.apiLoginBusy
+                            onClicked: apiTokenDialog.open()
+                        }
+                    }
+                }
+                Rectangle {
                     visible: backend.authenticationRequired
                     Layout.fillWidth: true
                     implicitHeight: authPrompt.implicitHeight + 18
@@ -607,6 +645,19 @@ ApplicationWindow {
                             event.accepted = true
                         }
                     }
+                    }
+                    footer: Item {
+                        width: documentList.width
+                        height: backend.hasMoreDocuments ? 58 : 0
+                        visible: backend.hasMoreDocuments
+                        Button {
+                            anchors.centerIn: parent
+                            enabled: !backend.busy
+                            text: backend.busy ? qsTr("Loading…") : qsTr("Load more documents")
+                            font.family: theme.uiFont
+                            onClicked: backend.loadMoreDocuments()
+                            Material.roundedScale: Material.NotRounded
+                        }
                     }
                     onCurrentIndexChanged: {
                         if (currentIndex >= 0) {
@@ -1154,6 +1205,68 @@ ApplicationWindow {
     }
 
     Dialog { Material.roundedScale: Material.NotRounded;
+        id: apiTokenDialog
+        objectName: "apiTokenDialog"
+        modal: true
+        anchors.centerIn: parent
+        width: 500
+        title: qsTr("Connect Readwise API")
+        standardButtons: Dialog.NoButton
+        contentItem: ColumnLayout {
+            spacing: 10
+            Label {
+                text: qsTr("Paste a Readwise access token. Omawise validates it and stores it in your desktop keyring; it is never written to app settings or passed in command arguments.")
+                wrapMode: Text.Wrap
+                Layout.fillWidth: true
+            }
+            Button {
+                text: qsTr("Get an access token from Readwise")
+                font.family: theme.uiFont
+                onClicked: backend.openExternalUrl("https://readwise.io/access_token")
+            }
+            TextField {
+                id: apiTokenField
+                objectName: "apiTokenField"
+                Layout.fillWidth: true
+                placeholderText: qsTr("Readwise access token")
+                echoMode: TextInput.Password
+                selectByMouse: true
+                enabled: !backend.apiLoginBusy
+                onAccepted: if (!backend.apiLoginBusy) backend.saveApiToken(text)
+            }
+            Label {
+                visible: backend.apiLoginError.length > 0
+                text: backend.apiLoginError
+                color: "#ffb4ab"
+                wrapMode: Text.Wrap
+                Layout.fillWidth: true
+            }
+            BusyIndicator {
+                visible: backend.apiLoginBusy
+                running: visible
+                Layout.alignment: Qt.AlignHCenter
+            }
+        }
+        footer: RowLayout {
+            spacing: 8
+            Item { Layout.fillWidth: true }
+            Button {
+                text: qsTr("Cancel")
+                font.family: theme.uiFont
+                enabled: !backend.apiLoginBusy
+                onClicked: { apiTokenField.clear(); apiTokenDialog.close() }
+            }
+            Button {
+                text: qsTr("Connect")
+                font.family: theme.uiFont
+                enabled: apiTokenField.text.trim().length > 0 && !backend.apiLoginBusy && !backend.busy
+                onClicked: backend.saveApiToken(apiTokenField.text)
+            }
+        }
+        onClosed: apiTokenField.clear()
+    }
+
+    Dialog { Material.roundedScale: Material.NotRounded;
         id: paletteDialog
         visible: showPalette
         modal: true
@@ -1168,7 +1281,9 @@ ApplicationWindow {
                     { label: qsTr("Refresh current view"), key: "refresh" },
                     { label: qsTr("Open selected document"), key: "open" },
                     { label: qsTr("Archive selected document"), key: "archive" },
-                    { label: qsTr("Connect or sign in"), key: "login" },
+                    { label: qsTr("Connect direct Readwise API"), key: "connectApi" },
+                    { label: qsTr("Sign in to Readwise CLI"), key: "login" },
+                    { label: qsTr("Forget saved API token"), key: "forgetApi", enabled: backend.apiTokenAvailable && !backend.busy },
                     { label: qsTr("Keyboard shortcuts"), key: "help" },
                     { label: qsTr("Back to library"), key: "back" }
                 ]
@@ -1176,6 +1291,7 @@ ApplicationWindow {
                     required property var modelData
                     Layout.fillWidth: true
                     text: modelData.label
+                    enabled: modelData.enabled !== false
                     onClicked: runCommand(modelData.key)
                 }
             }

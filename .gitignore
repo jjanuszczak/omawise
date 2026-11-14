@@ -4,6 +4,7 @@
 /*.pkg.tar.zst
 *.user
 *.swp
+.env
 *.o
 *.moc
 moc_*.cpp

@@ -20,6 +20,7 @@ class BackendTests : public QObject {
 private slots:
     void initTestCase();
     void listAndFeedUseExpectedCliArguments();
+    void listPaginationAppendsAndDeduplicates();
     void searchMergesLocalAndRemoteResults();
     void moveDocumentUsesSupportedLocationCommand();
     void authenticationErrorsAreDetectedAndClearedOnRetry();
@@ -51,7 +52,8 @@ void BackendTests::initTestCase() {
               "  *reader-bulk-edit-document-metadata*) if [ \"$OMAWISE_NOTE_FAILURE\" = 1 ]; then printf '%s\\n' '{\"results\":[{\"id\":\"doc-42\",\"success\":false,\"error\":\"Document not found\"}]}' ; else printf '%s\\n' '{\"results\":[{\"id\":\"doc-42\",\"success\":true}]}' ; fi ;;\n"
               "  *--title-search*) printf '%s\\n' '{\"results\":[{\"id\":\"title-only\",\"title\":\"Title-only result\"}]}' ;;\n"
               "  *reader-search-documents*) printf '%s\\n' '{\"results\":[{\"id\":\"remote\",\"title\":\"Remote result\"}]}' ;;\n"
-              "  *reader-list-documents*) if [ \"$OMAWISE_AUTH_FAILURE\" = 1 ]; then printf '%s\\n' '401 Unauthorized' >&2; exit 1; else printf '%s\\n' '{\"results\":[{\"id\":\"local\",\"title\":\"Local article\",\"author\":\"A. Writer\"}]}' ; fi ;;\n"
+              "  *--page-cursor*) if [ \"$OMAWISE_PAGINATION_TEST\" = 1 ]; then printf '%s\\n' '{\"results\":[{\"id\":\"second\",\"title\":\"Second page\"},{\"id\":\"local\",\"title\":\"Duplicate row\"}],\"nextPageCursor\":null}' ; else printf '%s\\n' '{\"results\":[]}' ; fi ;;\n"
+              "  *reader-list-documents*) if [ \"$OMAWISE_AUTH_FAILURE\" = 1 ]; then printf '%s\\n' '401 Unauthorized' >&2; exit 1; elif [ \"$OMAWISE_PAGINATION_TEST\" = 1 ]; then printf '%s\\n' '{\"results\":[{\"id\":\"local\",\"title\":\"Local article\",\"author\":\"A. Writer\"}],\"nextPageCursor\":\"cursor-1\"}' ; else printf '%s\\n' '{\"results\":[{\"id\":\"local\",\"title\":\"Local article\",\"author\":\"A. Writer\"}]}' ; fi ;;\n"
               "  *reader-get-document-details*) if [ \"$OMAWISE_DETAIL_JSON_STRING\" = 1 ]; then printf '%s\\n' '\"# JSON article\\n\\nBody paragraph.\"' ; else printf '%s\\n' '# Article' '' 'First paragraph for selection.' '' 'Second paragraph for keyboard navigation.' ; fi ;;\n"
               "  *reader-set-highlight-notes*) printf '%s\\n' '{\"success\":true}' ;;\n"
               "  *reader-add-tags-to-highlight*) printf '%s\\n' '{\"success\":true}' ;;\n"
@@ -88,6 +90,27 @@ void BackendTests::listAndFeedUseExpectedCliArguments() {
     const QByteArray calls = log.readAll();
     QVERIFY(calls.contains("reader-list-documents --location new --limit 50"));
     QVERIFY(calls.contains("reader-list-documents --location feed --limit 50"));
+}
+
+void BackendTests::listPaginationAppendsAndDeduplicates() {
+    qputenv("OMAWISE_PAGINATION_TEST", "1");
+    Backend backend;
+    backend.refresh();
+    QTRY_VERIFY_WITH_TIMEOUT(!backend.busy(), 3000);
+    QCOMPARE(backend.documents().size(), 1);
+    QVERIFY(backend.hasMoreDocuments());
+
+    backend.loadMoreDocuments();
+    QTRY_VERIFY_WITH_TIMEOUT(!backend.busy(), 3000);
+    QCOMPARE(backend.documents().size(), 2);
+    QCOMPARE(backend.documents().at(0).toMap().value("id").toString(), QString("local"));
+    QCOMPARE(backend.documents().at(1).toMap().value("id").toString(), QString("second"));
+    QVERIFY(!backend.hasMoreDocuments());
+
+    QFile log(m_logPath);
+    QVERIFY(log.open(QIODevice::ReadOnly | QIODevice::Text));
+    QVERIFY(log.readAll().contains("reader-list-documents --location new --limit 50 --page-cursor cursor-1"));
+    qunsetenv("OMAWISE_PAGINATION_TEST");
 }
 
 void BackendTests::searchMergesLocalAndRemoteResults() {
@@ -230,12 +253,26 @@ void BackendTests::qmlSearchActivationAndReaderSelection() {
     QObject *list = window->findChild<QObject *>(QStringLiteral("documentList"));
     QObject *openButton = window->findChild<QObject *>(QStringLiteral("openSelectedDocumentButton"));
     QObject *signInButton = window->findChild<QObject *>(QStringLiteral("authSignInButton"));
+    QObject *apiConnectButton = window->findChild<QObject *>(QStringLiteral("connectApiTokenButton"));
     QVERIFY(search);
     QVERIFY(list);
     QVERIFY(openButton);
     QVERIFY(signInButton);
+    QVERIFY(apiConnectButton);
     QVERIFY(!signInButton->property("visible").toBool());
     QTRY_VERIFY_WITH_TIMEOUT(!backend.busy(), 3000);
+    QTRY_VERIFY_WITH_TIMEOUT(backend.apiTokenReady(), 3000);
+    QVERIFY(QMetaObject::invokeMethod(apiConnectButton, "clicked"));
+    QObject *apiDialog = window->findChild<QObject *>(QStringLiteral("apiTokenDialog"));
+    QObject *apiTokenField = window->findChild<QObject *>(QStringLiteral("apiTokenField"));
+    QVERIFY(apiDialog);
+    QVERIFY(apiTokenField);
+    QVERIFY(apiDialog->property("visible").toBool());
+    QCOMPARE(apiTokenField->property("echoMode").toInt(), 2);
+    apiTokenField->setProperty("text", QStringLiteral("discard-this-test-value"));
+    QVERIFY(QMetaObject::invokeMethod(apiDialog, "close"));
+    QTRY_VERIFY(!apiDialog->property("visible").toBool());
+    QVERIFY(apiTokenField->property("text").toString().isEmpty());
 
     QVERIFY(QMetaObject::invokeMethod(search, "forceActiveFocus"));
     search->setProperty("text", QStringLiteral("Remote"));
@@ -344,6 +381,7 @@ void BackendTests::qmlSearchActivationAndReaderSelection() {
     QVERIFY(log.open(QIODevice::ReadOnly | QIODevice::Text));
     const QByteArray calls = log.readAll();
     QVERIFY(calls.count("reader-create-highlight --document-id remote") >= 2);
+    QVERIFY(calls.count("reader-get-document-highlights --document-id remote") >= 3);
 }
 
 int main(int argc, char **argv) {

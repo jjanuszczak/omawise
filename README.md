@@ -8,7 +8,7 @@
 
 # Omawise
 
-Omawise is an early, keyboard-first desktop companion for Readwise Reader, built with Qt Quick for Omarchy. Browse Inbox, Later, Shortlist, Archive, and Feed; search your library; read supported articles; and manage document notes, tags, highlights, and highlight annotations. The official Readwise CLI handles account access, keeping Readwise as the source of truth without Omawise storing your token.
+Omawise is an early, keyboard-first desktop companion for Readwise Reader, built with Qt Quick for Omarchy. Browse Inbox, Later, Shortlist, Archive, and Feed; search your library; read supported articles; and manage document notes, tags, highlights, and highlight annotations. When connected with an API token, Omawise uses the Reader API for faster library and article loading and stores the token in the desktop Secret Service keyring. The official CLI remains in use for hybrid search and annotation/write operations that are not yet migrated.
 
 For a development checkout, install and authenticate the official CLI, then launch the app:
 
@@ -18,7 +18,7 @@ readwise login
 ./bin/run
 ```
 
-Build and run the regression suite with `./bin/build`; run just the tests with `./bin/test`. The app invokes the CLI directly with `QProcess` and argument arrays (no shell), requests JSON for data commands, and surfaces CLI errors in the window. A **Sign in** action appears only after the CLI reports an authentication error. Omawise does not store or handle the Readwise token.
+Build and run the regression suite with `./bin/build`; run just the tests with `./bin/test`. Without an API token, Omawise uses the CLI for library listing and article details. To enable faster direct API reads, open the command palette with `Ctrl+K`, choose **Connect direct Readwise API**, and enter an access token from [Readwise](https://readwise.io/access_token). Omawise validates the token and stores it in the desktop keyring through Secret Service; it is never written to app settings or passed as a process argument. A Secret Service provider such as GNOME Keyring must be available. CLI OAuth remains required for hybrid search, highlight retrieval, and current annotation/write operations.
 
 ## Build and release packages
 

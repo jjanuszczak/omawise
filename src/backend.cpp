@@ -13,13 +13,59 @@
 #include <QFont>
 #include <QGuiApplication>
 #include <QUrl>
+#include <QUrlQuery>
+#include <QPointer>
+#include <QThreadPool>
+#include <QMetaObject>
+#ifdef signals
+#undef signals
+#define OMAWISE_RESTORE_QT_SIGNALS
+#endif
+#include <libsecret/secret.h>
+#ifdef OMAWISE_RESTORE_QT_SIGNALS
+#define signals Q_SIGNALS
+#undef OMAWISE_RESTORE_QT_SIGNALS
+#endif
+
+namespace {
+SecretSchema *apiTokenSchema() {
+    return secret_schema_new("org.omawise.ReadwiseApi", SECRET_SCHEMA_NONE,
+                             "service", SECRET_SCHEMA_ATTRIBUTE_STRING, nullptr);
+}
+
+QStringList tagNames(const QJsonValue &value) {
+    QStringList tags;
+    if (value.isArray()) {
+        for (const QJsonValue &tag : value.toArray()) {
+            if (tag.isString())
+                tags.append(tag.toString());
+            else if (tag.isObject()) {
+                const QString name = tag.toObject().value("name").toString();
+                if (!name.isEmpty())
+                    tags.append(name);
+            }
+        }
+    } else if (value.isObject()) {
+        const QJsonObject object = value.toObject();
+        for (auto it = object.begin(); it != object.end(); ++it) {
+            const QString name = it.value().isString() ? it.value().toString() : it.key();
+            if (!name.isEmpty())
+                tags.append(name);
+        }
+    }
+    return tags;
+}
+}
 
 Backend::Backend(QObject *parent) : QObject(parent) {
     connect(&m_process, &QProcess::finished, this, &Backend::finish);
     m_timeout.setSingleShot(true);
     m_timeout.setInterval(30000);
     connect(&m_timeout, &QTimer::timeout, this, [this] {
-        if (m_process.state() != QProcess::NotRunning) {
+        if (m_apiReply) {
+            m_timedOut = true;
+            m_apiReply->abort();
+        } else if (m_process.state() != QProcess::NotRunning) {
             m_timedOut = true;
             m_process.kill();
         }
@@ -34,10 +80,307 @@ Backend::Backend(QObject *parent) : QObject(parent) {
             fail(tr("Could not start the Readwise CLI. Install @readwise/cli and make sure 'readwise' is on PATH."));
         }
     });
-    if (QStandardPaths::findExecutable("readwise").isEmpty())
-        setStatus(tr("Readwise CLI not found"));
-    else
-        setStatus(tr("Readwise CLI ready · account not checked"));
+    connect(&m_network, &QNetworkAccessManager::finished, this, &Backend::handleApiReply);
+    setStatus(tr("Checking saved Readwise connection…"));
+    loadApiTokenFromKeyring();
+}
+
+void Backend::setApiLoginBusy(bool busy) {
+    if (m_apiLoginBusy == busy)
+        return;
+    m_apiLoginBusy = busy;
+    emit apiLoginBusyChanged();
+}
+
+void Backend::setApiLoginError(const QString &error) {
+    if (m_apiLoginError == error)
+        return;
+    m_apiLoginError = error;
+    emit apiLoginErrorChanged();
+}
+
+void Backend::setApiTokenRejected(bool rejected) {
+    if (m_apiTokenRejected == rejected)
+        return;
+    m_apiTokenRejected = rejected;
+    emit apiTokenStateChanged();
+}
+
+void Backend::loadApiTokenFromKeyring() {
+    QPointer<Backend> guard(this);
+    QThreadPool::globalInstance()->start([guard] {
+        SecretSchema *schema = apiTokenSchema();
+        GError *error = nullptr;
+        gchar *stored = secret_password_lookup_sync(schema, nullptr, &error,
+                                                    "service", "readwise-api", nullptr);
+        const QString token = stored ? QString::fromUtf8(stored) : QString();
+        if (stored)
+            secret_password_free(stored);
+        if (error)
+            g_error_free(error);
+        secret_schema_unref(schema);
+        if (!guard)
+            return;
+        QMetaObject::invokeMethod(guard, [guard, token] {
+            if (!guard)
+                return;
+            guard->m_apiToken = token;
+            guard->m_apiTokenReady = true;
+            emit guard->apiTokenStateChanged();
+            if (guard->m_refreshPending) {
+                guard->m_refreshPending = false;
+                guard->setBusy(false);
+                guard->refresh();
+            }
+        }, Qt::QueuedConnection);
+    });
+}
+
+void Backend::storeApiTokenInKeyring(const QString &token) {
+    setApiLoginBusy(true);
+    setApiLoginError({});
+    QPointer<Backend> guard(this);
+    QThreadPool::globalInstance()->start([guard, token] {
+        SecretSchema *schema = apiTokenSchema();
+        GError *error = nullptr;
+        const QByteArray utf8 = token.toUtf8();
+        const gboolean stored = secret_password_store_sync(
+            schema, SECRET_COLLECTION_DEFAULT, "Omawise Readwise API token", utf8.constData(),
+            nullptr, &error, "service", "readwise-api", nullptr);
+        if (error)
+            g_error_free(error);
+        secret_schema_unref(schema);
+        if (!guard)
+            return;
+        QMetaObject::invokeMethod(guard, [guard, token, stored] {
+            if (!guard)
+                return;
+            guard->setApiLoginBusy(false);
+            if (!stored) {
+                guard->setApiLoginError(guard->tr("Could not store the token in the desktop keyring. Check that a Secret Service keyring is available."));
+                return;
+            }
+            guard->m_apiToken = token;
+            guard->m_apiTokenRejected = false;
+            guard->m_apiTokenReady = true;
+            emit guard->apiTokenStateChanged();
+            guard->setStatus(guard->tr("Readwise account connected"));
+            guard->refresh();
+        }, Qt::QueuedConnection);
+    });
+}
+
+void Backend::clearApiTokenFromKeyring() {
+    setApiLoginBusy(true);
+    QPointer<Backend> guard(this);
+    const QString previousToken = m_apiToken;
+    QThreadPool::globalInstance()->start([guard, previousToken] {
+        SecretSchema *schema = apiTokenSchema();
+        GError *error = nullptr;
+        const gboolean cleared = secret_password_clear_sync(schema, nullptr, &error,
+                                                             "service", "readwise-api", nullptr);
+        if (error)
+            g_error_free(error);
+        secret_schema_unref(schema);
+        if (!guard)
+            return;
+        QMetaObject::invokeMethod(guard, [guard, previousToken, cleared] {
+            if (!guard)
+                return;
+            if (!cleared) {
+                guard->m_apiToken = previousToken;
+                guard->setApiLoginBusy(false);
+                guard->setApiLoginError(guard->tr("Could not remove the Readwise token from the desktop keyring."));
+                emit guard->apiTokenStateChanged();
+                return;
+            }
+            guard->m_apiToken.clear();
+            guard->m_apiTokenRejected = false;
+            guard->m_apiTokenReady = true;
+            guard->setApiLoginBusy(false);
+            guard->setApiLoginError({});
+            emit guard->apiTokenStateChanged();
+            guard->m_documents.clear();
+            guard->m_libraryDocuments.clear();
+            guard->m_nextCursor.clear();
+            emit guard->documentsChanged();
+            emit guard->hasMoreDocumentsChanged();
+            guard->refresh();
+        }, Qt::QueuedConnection);
+    });
+}
+
+void Backend::saveApiToken(const QString &value) {
+    if (m_busy || m_apiLoginBusy) {
+        setApiLoginError(tr("Wait for the current Readwise request to finish."));
+        return;
+    }
+    const QString token = value.trimmed();
+    if (token.isEmpty()) {
+        setApiLoginError(tr("Enter a Readwise access token."));
+        return;
+    }
+    if (m_apiReply)
+        m_apiReply->abort();
+    m_pendingApiToken = token;
+    setApiLoginError({});
+    setApiLoginBusy(true);
+    setStatus(tr("Validating Readwise access token…"));
+    runApiGet(QUrl(QStringLiteral("https://readwise.io/api/v2/auth/")), Operation::ValidateApiToken, token);
+}
+
+void Backend::forgetApiToken() {
+    if (m_busy || m_apiLoginBusy)
+        return;
+    m_pendingApiToken.clear();
+    m_apiTokenRejected = false;
+    clearApiTokenFromKeyring();
+}
+
+void Backend::runApiGet(const QUrl &url, Operation operation, const QString &token) {
+    if (m_busy || m_apiReply || m_process.state() != QProcess::NotRunning)
+        return;
+    const QString &authToken = token.isEmpty() ? m_apiToken : token;
+    if (authToken.isEmpty() && operation != Operation::ValidateApiToken) {
+        setStatus(tr("Connect a Readwise account"));
+        return;
+    }
+    clearError();
+    QNetworkRequest request(url);
+    request.setRawHeader("Authorization", QByteArrayLiteral("Token ") + authToken.toUtf8());
+    request.setRawHeader("Accept", "application/json");
+    request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::ManualRedirectPolicy);
+    m_operation = operation;
+    setBusy(true);
+    m_apiReply = m_network.get(request);
+    m_timeout.setInterval(30000);
+    m_timeout.start();
+}
+
+void Backend::handleApiReply(QNetworkReply *reply) {
+    if (reply != m_apiReply)
+        return;
+    m_timeout.stop();
+    const Operation operation = m_operation;
+    m_operation = Operation::None;
+    m_apiReply = nullptr;
+    const int statusCode = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+    const QNetworkReply::NetworkError networkError = reply->error();
+    const QByteArray responseBody = reply->readAll();
+    reply->deleteLater();
+    setBusy(false);
+
+    if (m_timedOut) {
+        m_timedOut = false;
+        if (operation == Operation::ValidateApiToken) {
+            setApiLoginBusy(false);
+            setApiLoginError(tr("Token validation timed out. Check your connection and try again."));
+        } else {
+            setStatus(tr("Readwise API request timed out"));
+            fail(tr("Readwise did not respond before the timeout."));
+        }
+        return;
+    }
+
+    if (operation == Operation::ValidateApiToken) {
+        if (statusCode == 204 && networkError == QNetworkReply::NoError) {
+            storeApiTokenInKeyring(m_pendingApiToken);
+            m_pendingApiToken.clear();
+        } else {
+            m_pendingApiToken.clear();
+            setApiLoginBusy(false);
+            setApiLoginError(statusCode == 401
+                                 ? tr("That token was rejected. Check it and try again.")
+                                 : tr("Could not validate the token (HTTP %1). Check your connection and try again.").arg(statusCode));
+        }
+        return;
+    }
+
+    if (networkError != QNetworkReply::NoError || statusCode < 200 || statusCode >= 300) {
+        if (statusCode == 401 || statusCode == 403) {
+            setApiTokenRejected(true);
+            setApiLoginError(tr("The saved Readwise token was rejected. Connect again with a valid token."));
+        }
+        setStatus(tr("Readwise API request failed"));
+        fail(statusCode == 401 || statusCode == 403
+                 ? tr("Readwise rejected the saved access token.")
+                 : tr("Readwise API request failed (HTTP %1).").arg(statusCode));
+        return;
+    }
+
+    QJsonParseError parseError;
+    const QJsonDocument document = QJsonDocument::fromJson(responseBody, &parseError);
+    if (parseError.error != QJsonParseError::NoError || !document.isObject()) {
+        setStatus(tr("Unexpected Readwise API response"));
+        fail(tr("Readwise returned unrecognized data."));
+        return;
+    }
+    const QJsonObject root = document.object();
+    if (operation == Operation::List) {
+        m_libraryDocuments = resultRows(document);
+        m_documents = m_libraryDocuments;
+        const QString previousCursor = m_nextCursor;
+        m_nextCursor = root.value("nextPageCursor").toString();
+        if (previousCursor != m_nextCursor)
+            emit hasMoreDocumentsChanged();
+        emit documentsChanged();
+        setApiTokenRejected(false);
+        setStatus(tr("%1 documents").arg(m_documents.size()));
+        if (m_documents.isEmpty())
+            fail(tr("No documents in this view."));
+        return;
+    }
+    if (operation == Operation::ListMore) {
+        const QVariantList page = resultRows(document);
+        QSet<QString> seen;
+        for (const QVariant &row : m_libraryDocuments)
+            seen.insert(row.toMap().value("id").toString());
+        for (const QVariant &row : page) {
+            const QString id = row.toMap().value("id").toString();
+            if (!id.isEmpty() && !seen.contains(id)) {
+                m_libraryDocuments.append(row);
+                m_documents.append(row);
+                seen.insert(id);
+            }
+        }
+        const QString previousCursor = m_nextCursor;
+        m_nextCursor = root.value("nextPageCursor").toString();
+        if (previousCursor != m_nextCursor)
+            emit hasMoreDocumentsChanged();
+        setApiTokenRejected(false);
+        emit documentsChanged();
+        setStatus(tr("%1 documents").arg(m_documents.size()));
+        return;
+    }
+    if (operation == Operation::Detail || operation == Operation::ApiDetail) {
+        QJsonArray rows = root.value("results").toArray();
+        if (rows.isEmpty() && root.value("id").isString())
+            rows.append(root);
+        if (rows.isEmpty() || !rows.first().isObject()) {
+            setStatus(tr("Document not found"));
+            fail(tr("Readwise returned no details for this document."));
+            return;
+        }
+        const QJsonObject object = rows.first().toObject();
+        const QString detailId = object.value("id").toString(m_pendingId);
+        QString content = object.value("html_content").toString();
+        if (content.isEmpty())
+            content = object.value("content").toString();
+        m_contentCache.insert(detailId, content);
+        if (m_selectedId != detailId)
+            return;
+        const QString title = object.value("title").toString();
+        const QString author = object.value("author").toString();
+        if (!title.isEmpty()) m_selectedTitle = title;
+        if (!author.isEmpty()) m_selectedAuthor = author;
+        if (object.value("notes").isString()) m_selectedNote = object.value("notes").toString();
+        if (!object.value("tags").isUndefined()) m_selectedTags = tagNames(object.value("tags"));
+        m_selectedContent = content;
+        emit selectedDocumentChanged();
+        setApiTokenRejected(false);
+        setStatus(tr("Document opened"));
+        loadHighlights();
+    }
 }
 
 void Backend::setBusy(bool busy) {
@@ -103,7 +446,7 @@ void Backend::clearError() {
 }
 
 void Backend::run(const QStringList &arguments, Operation operation) {
-    if (m_process.state() != QProcess::NotRunning)
+    if (m_busy || m_process.state() != QProcess::NotRunning || m_apiReply)
         return;
 
     clearError();
@@ -127,7 +470,17 @@ void Backend::run(const QStringList &arguments, Operation operation) {
 }
 
 void Backend::refresh() {
+    if (!m_apiTokenReady) {
+        m_refreshPending = true;
+        setBusy(true);
+        setStatus(tr("Checking saved Readwise connection…"));
+        return;
+    }
     m_activeQuery.clear();
+    if (!m_nextCursor.isEmpty()) {
+        m_nextCursor.clear();
+        emit hasMoreDocumentsChanged();
+    }
     QString viewName = m_location;
     if (m_location == "new") viewName = tr("Inbox");
     else if (m_location == "later") viewName = tr("Later");
@@ -135,7 +488,34 @@ void Backend::refresh() {
     else if (m_location == "archive") viewName = tr("Archive");
     else if (m_location == "feed") viewName = tr("Feed");
     setStatus(tr("Loading %1…").arg(viewName));
-    run({"--json", "reader-list-documents", "--location", m_location, "--limit", "50"}, Operation::List);
+    if (!m_apiToken.isEmpty()) {
+        QUrl apiUrl(QStringLiteral("https://readwise.io/api/v3/list/"));
+        QUrlQuery query;
+        query.addQueryItem(QStringLiteral("location"), m_location);
+        query.addQueryItem(QStringLiteral("limit"), QStringLiteral("50"));
+        apiUrl.setQuery(query);
+        runApiGet(apiUrl, Operation::List);
+    } else {
+        run({"--json", "reader-list-documents", "--location", m_location, "--limit", "50"}, Operation::List);
+    }
+}
+
+void Backend::loadMoreDocuments() {
+    if (m_nextCursor.isEmpty() || m_busy || !m_activeQuery.isEmpty())
+        return;
+    setStatus(tr("Loading more documents…"));
+    if (!m_apiToken.isEmpty()) {
+        QUrl apiUrl(QStringLiteral("https://readwise.io/api/v3/list/"));
+        QUrlQuery query;
+        query.addQueryItem(QStringLiteral("location"), m_location);
+        query.addQueryItem(QStringLiteral("limit"), QStringLiteral("50"));
+        query.addQueryItem(QStringLiteral("pageCursor"), m_nextCursor);
+        apiUrl.setQuery(query);
+        runApiGet(apiUrl, Operation::ListMore);
+    } else {
+        run({"--json", "reader-list-documents", "--location", m_location, "--limit", "50",
+             "--page-cursor", m_nextCursor}, Operation::ListMore);
+    }
 }
 
 void Backend::setLocation(const QString &location) {
@@ -153,6 +533,10 @@ void Backend::search(const QString &query) {
     if (trimmed.isEmpty()) {
         refresh();
         return;
+    }
+    if (!m_nextCursor.isEmpty()) {
+        m_nextCursor.clear();
+        emit hasMoreDocumentsChanged();
     }
     m_localSearchMatches.clear();
     for (const QVariant &value : m_libraryDocuments) {
@@ -196,7 +580,18 @@ void Backend::openDocument(const QString &id, const QString &title, const QStrin
     m_selectedContent.clear();
     emit selectedDocumentChanged();
     setStatus(tr("Opening document…"));
-    run({"--json", "reader-get-document-details", "--document-id", id}, Operation::Detail);
+    m_pendingId = id;
+    if (!m_apiToken.isEmpty()) {
+        QUrl apiUrl(QStringLiteral("https://readwise.io/api/v3/list/"));
+        QUrlQuery query;
+        query.addQueryItem(QStringLiteral("id"), id);
+        query.addQueryItem(QStringLiteral("limit"), QStringLiteral("1"));
+        query.addQueryItem(QStringLiteral("withHtmlContent"), QStringLiteral("true"));
+        apiUrl.setQuery(query);
+        runApiGet(apiUrl, Operation::ApiDetail);
+    } else {
+        run({"--json", "reader-get-document-details", "--document-id", id}, Operation::Detail);
+    }
 }
 
 void Backend::selectDocument(const QString &id, const QString &title, const QString &author, const QString &url,
@@ -543,8 +938,12 @@ QVariantList Backend::resultRows(const QJsonDocument &document) {
         const QJsonObject object = value.toObject();
         QVariantMap row;
         for (const QString key : {"id", "title", "author", "source", "site_name", "category", "location", "summary", "reading_time", "listening_time", "word_count", "url", "source_url", "first_opened_at", "published_date", "saved_at", "reading_progress", "image_url", "notes", "tags"}) {
-            if (!object.value(key).isUndefined() && !object.value(key).isNull())
+            if (key == "tags") {
+                if (!object.value(key).isUndefined() && !object.value(key).isNull())
+                    row.insert(key, tagNames(object.value(key)));
+            } else if (!object.value(key).isUndefined() && !object.value(key).isNull()) {
                 row.insert(key, object.value(key).toVariant());
+            }
         }
         for (const QString key : {"id", "title", "author", "source", "site_name", "category", "location", "summary", "reading_time", "listening_time", "first_opened_at"}) {
             if (!row.contains(key))
@@ -740,14 +1139,58 @@ void Backend::finish(int exitCode, QProcess::ExitStatus exitStatus) {
     }
 
     switch (operation) {
-    case Operation::List:
+    case Operation::List: {
         m_libraryDocuments = resultRows(json);
         m_documents = m_libraryDocuments;
+        const QString previousCursor = m_nextCursor;
+        m_nextCursor.clear();
+        if (json.isObject()) {
+            const QJsonObject root = json.object();
+            for (const QString key : {"next_cursor", "nextCursor", "next_page_cursor", "nextPageCursor", "cursor"}) {
+                if (root.value(key).isString()) {
+                    m_nextCursor = root.value(key).toString();
+                    break;
+                }
+            }
+        }
+        if (previousCursor != m_nextCursor)
+            emit hasMoreDocumentsChanged();
         emit documentsChanged();
         setStatus(tr("%1 documents").arg(m_documents.size()));
         if (m_documents.isEmpty())
             fail(tr("No documents in this view."));
         break;
+    }
+    case Operation::ListMore: {
+        const QVariantList page = resultRows(json);
+        QSet<QString> seen;
+        for (const QVariant &row : m_libraryDocuments)
+            seen.insert(row.toMap().value("id").toString());
+        for (const QVariant &row : page) {
+            const QString id = row.toMap().value("id").toString();
+            if (!id.isEmpty() && !seen.contains(id)) {
+                m_libraryDocuments.append(row);
+                m_documents.append(row);
+                seen.insert(id);
+            }
+        }
+        const QString previousCursor = m_nextCursor;
+        m_nextCursor.clear();
+        if (json.isObject()) {
+            const QJsonObject root = json.object();
+            for (const QString key : {"next_cursor", "nextCursor", "next_page_cursor", "nextPageCursor", "cursor"}) {
+                if (root.value(key).isString()) {
+                    m_nextCursor = root.value(key).toString();
+                    break;
+                }
+            }
+        }
+        if (previousCursor != m_nextCursor)
+            emit hasMoreDocumentsChanged();
+        emit documentsChanged();
+        setStatus(tr("%1 documents").arg(m_documents.size()));
+        break;
+    }
     case Operation::Search: {
         const QVariantList remoteMatches = resultRows(json);
         QVariantList merged = m_localSearchMatches;
@@ -942,6 +1385,8 @@ void Backend::finish(int exitCode, QProcess::ExitStatus exitStatus) {
         break;
     }
     case Operation::None:
+    case Operation::ApiDetail:
+    case Operation::ValidateApiToken:
     case Operation::Login:
         break;
     }

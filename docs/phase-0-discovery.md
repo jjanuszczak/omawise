@@ -37,7 +37,7 @@ Read-only local inspection only; no account command or credential file was acces
 
 ### Integration decision for the next phase
 
-Phase 1 uses the **CLI adapter** for the first vertical slice: fixed command allowlist, asynchronous `QProcess`, JSON mode, no shell, and no secrets in arguments. This keeps login and credential storage in the official CLI and matches the existing local agent workflow. The GUI still needs a latency benchmark and response-shape validation against an account before this is treated as a settled long-term contract. If process startup or a feature gap is material, add a direct API adapter behind the same repository interface; never read private CLI config files.
+Phase 1 began with the **CLI adapter** for the first vertical slice: fixed command allowlist, asynchronous `QProcess`, JSON mode, no shell, and no secrets in arguments. A five-run account benchmark found direct API list/detail reads materially faster (about 0.45–0.75 s versus 2.4–3.1 s through the CLI). Omawise now supports an optional direct API token, validated through the documented auth endpoint and stored in Secret Service with libsecret. Direct API list/detail reads use `QNetworkAccessManager`; search and annotation/write features remain CLI-backed where API equivalents have not been implemented. Never read private CLI config files.
 
 ## UX prototype
 
