@@ -46,11 +46,16 @@ public:
     Q_INVOKABLE void refresh();
     Q_INVOKABLE void setLocation(const QString &location);
     Q_INVOKABLE void search(const QString &query);
-    Q_INVOKABLE void openDocument(const QString &id, const QString &title, const QString &author, const QString &url);
+    Q_INVOKABLE void openDocument(const QString &id, const QString &title, const QString &author, const QString &url,
+                                  const QStringList &tags = {}, const QString &note = {});
     Q_INVOKABLE void archiveDocument(const QString &id);
+    Q_INVOKABLE void moveDocument(const QString &id, const QString &location);
     Q_INVOKABLE void saveDocumentNote(const QString &id, const QString &note);
     Q_INVOKABLE void saveDocumentTags(const QString &id, const QStringList &tags);
     Q_INVOKABLE void createHighlight(const QString &documentId, const QString &text);
+    Q_INVOKABLE void saveHighlightNote(const QString &documentId, const QString &highlightId, const QString &note);
+    Q_INVOKABLE void addHighlightTags(const QString &documentId, const QString &highlightId, const QStringList &tags);
+    Q_INVOKABLE void removeHighlightTags(const QString &documentId, const QString &highlightId, const QStringList &tags);
     Q_INVOKABLE void loadHighlights();
     Q_INVOKABLE void login();
     Q_INVOKABLE void clearError();
@@ -66,12 +71,13 @@ signals:
     void locationChanged();
 
 private:
-    enum class Operation { None, List, Search, Detail, Highlights, Archive, SaveNote, SaveTags, CreateHighlight, Login };
+    enum class Operation { None, List, Search, TitleSearch, Detail, Highlights, Archive, Move, SaveNote, SaveTags, CreateHighlight, SaveHighlightNote, AddHighlightTags, RemoveHighlightTags, Login };
     void run(const QStringList &arguments, Operation operation);
     void finish(int exitCode, QProcess::ExitStatus exitStatus);
     void fail(const QString &message);
     void setBusy(bool busy);
     void setStatus(const QString &status);
+    void updateDocumentRows(const QString &key, const QVariant &value);
     static QVariantList resultRows(const QJsonDocument &document);
     static QVariantList highlightRows(const QJsonDocument &document);
     static QJsonObject unwrapObject(const QJsonDocument &document);
@@ -97,6 +103,10 @@ private:
     QString m_location = "new";
     QString m_activeQuery;
     QString m_pendingId;
+    QString m_pendingLocation;
     QString m_pendingNote;
     QStringList m_pendingTags;
+    QString m_pendingHighlightId;
+    QString m_pendingHighlightNote;
+    QStringList m_pendingHighlightTags;
 };

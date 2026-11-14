@@ -8,7 +8,7 @@ ApplicationWindow {
     visible: true
     width: 1360
     height: 880
-    minimumWidth: 980
+    minimumWidth: 1140
     minimumHeight: 650
     title: qsTr("Readwise Reader")
     color: "#17191d"
@@ -18,6 +18,9 @@ ApplicationWindow {
 
     property int selectedIndex: 0
     property bool reading: false
+    property bool listItemSelected: false
+    property bool pendingInspection: false
+    property string lastInspectedDocumentId: ""
     property bool showHelp: false
     property bool showPalette: false
     property string pendingHighlightText: ""
@@ -33,12 +36,65 @@ ApplicationWindow {
         return backend.documents[selectedIndex]
     }
 
+    function documentTags(doc) {
+        const values = doc.tags || []
+        const tags = []
+        for (let i = 0; i < values.length; i++) {
+            const tag = typeof values[i] === "string" ? values[i] : values[i].name
+            if (tag)
+                tags.push(tag)
+        }
+        return tags
+    }
+
+    function documentLocation() {
+        const location = selectedDocument().location || backend.location
+        return location === "inbox" ? "new" : location
+    }
+
+    function inspectSelectedDocument() {
+        const doc = selectedDocument()
+        if (!doc.id || reading || doc.id === lastInspectedDocumentId)
+            return
+        if (backend.busy)
+            return
+        lastInspectedDocumentId = doc.id
+        if (doc.id)
+            backend.openDocument(doc.id, doc.title || "", doc.author || "", doc.url || "", documentTags(doc), doc.notes || "")
+    }
+
+    function scheduleSelectedDocumentInspection() {
+        pendingInspection = true
+        Qt.callLater(function() {
+            if (!pendingInspection || backend.busy)
+                return
+            pendingInspection = false
+            inspectSelectedDocument()
+        })
+    }
+
+    function addDocumentTag() {
+        const tag = newDocumentTagEditor.text.trim()
+        if (!tag)
+            return
+        const tags = backend.selectedTags.slice()
+        if (!tags.some(function(value) { return value.toLowerCase() === tag.toLowerCase() }))
+            tags.push(tag)
+        backend.saveDocumentTags(selectedDocument().id || "", tags)
+        newDocumentTagEditor.clear()
+    }
+
+    function removeDocumentTag(tag) {
+        const tags = backend.selectedTags.filter(function(value) { return value.toLowerCase() !== tag.toLowerCase() })
+        backend.saveDocumentTags(selectedDocument().id || "", tags)
+    }
+
     function openSelected() {
         const doc = selectedDocument()
         if (doc.id) {
             articleFlickable.contentY = 0
             reading = true
-            backend.openDocument(doc.id, doc.title || "", doc.author || "", doc.url || "")
+            backend.openDocument(doc.id, doc.title || "", doc.author || "", doc.url || "", documentTags(doc), doc.notes || "")
         }
     }
 
@@ -48,12 +104,20 @@ ApplicationWindow {
         articleFlickable.contentY = 0
         reading = true
         const doc = selectedDocument()
-        backend.openDocument(id, doc.title || "", doc.author || "", doc.url || "")
+        backend.openDocument(id, doc.title || "", doc.author || "", doc.url || "", documentTags(doc), doc.notes || "")
     }
 
     function setLocationAndFocus(location) {
         backend.setLocation(location)
         documentList.forceActiveFocus()
+    }
+
+    function returnToLibrary() {
+        const movedFromCurrentView = documentLocation() !== backend.location
+        reading = false
+        if (movedFromCurrentView)
+            backend.refresh()
+        Qt.callLater(function() { documentList.forceActiveFocus() })
     }
 
     function scrollToHeading(position) {
@@ -187,34 +251,61 @@ ApplicationWindow {
             if (doc.id) backend.archiveDocument(doc.id)
         } else if (command === "help") showHelp = true
         else if (command === "login") backend.login()
-        else if (command === "back") reading = false
+        else if (command === "back") returnToLibrary()
     }
 
     Shortcut { sequence: "Ctrl+K"; context: Qt.ApplicationShortcut; onActivated: showPalette = true }
+    Shortcut { sequence: "Return"; context: Qt.ApplicationShortcut; enabled: !reading && listItemSelected && !!selectedDocument().id && !backend.busy && !showHelp && !showPalette && !searchField.activeFocus && !newDocumentTagEditor.activeFocus && !documentNoteEditor.activeFocus; onActivated: openSelected() }
+    Shortcut { sequence: "Enter"; context: Qt.ApplicationShortcut; enabled: !reading && listItemSelected && !!selectedDocument().id && !backend.busy && !showHelp && !showPalette && !searchField.activeFocus && !newDocumentTagEditor.activeFocus && !documentNoteEditor.activeFocus; onActivated: openSelected() }
     Shortcut { sequence: "/"; context: Qt.ApplicationShortcut; enabled: !reading && !searchField.activeFocus && !showPalette; onActivated: searchField.forceActiveFocus() }
     Shortcut { sequence: "?"; context: Qt.ApplicationShortcut; enabled: !searchField.activeFocus && !showPalette; onActivated: showHelp = !showHelp }
-    Shortcut { sequence: "Escape"; context: Qt.ApplicationShortcut; enabled: !searchField.activeFocus; onActivated: { if (showPalette) showPalette = false; else if (showHelp) showHelp = false; else if (reading) { reading = false; documentList.forceActiveFocus() } } }
+    Shortcut { sequence: "Escape"; context: Qt.ApplicationShortcut; enabled: !searchField.activeFocus; onActivated: { if (showPalette) showPalette = false; else if (showHelp) showHelp = false; else if (reading) returnToLibrary() } }
     Shortcut { sequence: "Ctrl+R"; context: Qt.ApplicationShortcut; enabled: !showPalette && !backend.busy; onActivated: backend.refresh() }
     Shortcut { sequence: "Ctrl+Left"; context: Qt.ApplicationShortcut; enabled: !reading && !showPalette && !searchField.activeFocus; onActivated: navList.forceActiveFocus() }
     Shortcut { sequence: "Ctrl+Right"; context: Qt.ApplicationShortcut; enabled: !reading && !showPalette && !searchField.activeFocus; onActivated: documentList.forceActiveFocus() }
-    Shortcut { sequence: "Ctrl+Shift+H"; context: Qt.ApplicationShortcut; enabled: reading && !showPalette && !noteDialog.visible && !tagDialog.visible && !highlightsDialog.visible && !helpDialog.visible && articleText.selectedText.trim().length > 0; onActivated: createSelectedHighlight() }
-    Shortcut { sequence: "Ctrl+Shift+Left"; context: Qt.ApplicationShortcut; enabled: reading && !noteDialog.visible && !tagDialog.visible && !highlightsDialog.visible && !helpDialog.visible && !paletteDialog.visible; onActivated: extendArticleWordSelection(-1) }
-    Shortcut { sequence: "Ctrl+Shift+Right"; context: Qt.ApplicationShortcut; enabled: reading && !noteDialog.visible && !tagDialog.visible && !highlightsDialog.visible && !helpDialog.visible && !paletteDialog.visible; onActivated: extendArticleWordSelection(1) }
-    Shortcut { sequence: "Up"; context: Qt.ApplicationShortcut; enabled: reading && !noteDialog.visible && !tagDialog.visible && !highlightsDialog.visible && !helpDialog.visible && !paletteDialog.visible; onActivated: moveArticleParagraph(-1) }
-    Shortcut { sequence: "Down"; context: Qt.ApplicationShortcut; enabled: reading && !noteDialog.visible && !tagDialog.visible && !highlightsDialog.visible && !helpDialog.visible && !paletteDialog.visible; onActivated: moveArticleParagraph(1) }
-    Shortcut { sequence: "H"; context: Qt.ApplicationShortcut; enabled: reading && articleText.selectedText.trim().length > 0 && !noteDialog.visible && !tagDialog.visible && !highlightsDialog.visible && !helpDialog.visible && !paletteDialog.visible; onActivated: createSelectedHighlight() }
+    Shortcut { sequence: "Ctrl+Shift+H"; context: Qt.ApplicationShortcut; enabled: reading && !showPalette && !helpDialog.visible && articleText.selectedText.trim().length > 0; onActivated: createSelectedHighlight() }
+    Shortcut { sequence: "Ctrl+Shift+Left"; context: Qt.ApplicationShortcut; enabled: reading && !helpDialog.visible && !paletteDialog.visible; onActivated: extendArticleWordSelection(-1) }
+    Shortcut { sequence: "Ctrl+Shift+Right"; context: Qt.ApplicationShortcut; enabled: reading && !helpDialog.visible && !paletteDialog.visible; onActivated: extendArticleWordSelection(1) }
+    Shortcut { sequence: "Up"; context: Qt.ApplicationShortcut; enabled: reading && !helpDialog.visible && !paletteDialog.visible; onActivated: moveArticleParagraph(-1) }
+    Shortcut { sequence: "Down"; context: Qt.ApplicationShortcut; enabled: reading && !helpDialog.visible && !paletteDialog.visible; onActivated: moveArticleParagraph(1) }
+    Shortcut { sequence: "H"; context: Qt.ApplicationShortcut; enabled: reading && articleText.selectedText.trim().length > 0 && !helpDialog.visible && !paletteDialog.visible; onActivated: createSelectedHighlight() }
 
     Component.onCompleted: {
         backend.refresh()
         documentList.forceActiveFocus()
     }
-    onSelectedIndexChanged: documentList.currentIndex = selectedIndex
+    onSelectedIndexChanged: {
+        documentList.currentIndex = selectedIndex
+        if (!reading)
+            scheduleSelectedDocumentInspection()
+    }
 
     Connections {
         target: backend
         function onDocumentsChanged() {
-            selectedIndex = backend.documents.length > 0 ? 0 : -1
+            const previousId = selectedDocument().id || ""
+            let nextIndex = -1
+            if (previousId) {
+                for (let i = 0; i < backend.documents.length; i++) {
+                    if (backend.documents[i].id === previousId) {
+                        nextIndex = i
+                        break
+                    }
+                }
+            }
+            if (nextIndex < 0 && backend.documents.length > 0)
+                nextIndex = 0
+            selectedIndex = nextIndex
             documentList.currentIndex = selectedIndex
+            const nextId = selectedDocument().id || ""
+            if (!reading && nextId !== previousId) {
+                lastInspectedDocumentId = ""
+                scheduleSelectedDocumentInspection()
+            }
+        }
+        function onBusyChanged() {
+            if (!backend.busy && pendingInspection)
+                scheduleSelectedDocumentInspection()
         }
         function onLocationChanged() {
             for (let i = 0; i < navList.model.length; i++) {
@@ -223,6 +314,9 @@ ApplicationWindow {
                     break
                 }
             }
+        }
+        function onSelectedDocumentChanged() {
+            documentNoteEditor.text = backend.selectedNote
         }
     }
 
@@ -262,6 +356,7 @@ ApplicationWindow {
                     enabled: !backend.busy
                     activeFocusOnTab: true
                     onAccepted: {
+                        listItemSelected = false
                         backend.search(text)
                         documentList.forceActiveFocus()
                     }
@@ -278,6 +373,7 @@ ApplicationWindow {
                     id: navList
                     objectName: "navList"
                     visible: !reading
+                    onActiveFocusChanged: if (activeFocus) listItemSelected = false
                     Layout.fillWidth: true
                     Layout.preferredHeight: contentHeight
                     implicitHeight: contentHeight
@@ -407,7 +503,25 @@ ApplicationWindow {
                 Layout.leftMargin: 20
                 Layout.rightMargin: 16
                 Text { text: reading ? qsTr("Library") : locationLabel(backend.location); color: "#f0f1ed"; font.family: theme.uiFont; font.pixelSize: 18; font.weight: Font.DemiBold; Layout.fillWidth: true }
-                ToolButton { Material.roundedScale: Material.NotRounded; text: "↻"; font.family: theme.uiFont; font.pixelSize: 17; enabled: !backend.busy; onClicked: backend.refresh(); ToolTip.visible: hovered; ToolTip.text: qsTr("Refresh (R)") }
+                ToolButton {
+                    objectName: "openSelectedDocumentButton"
+                    implicitWidth: 34; implicitHeight: 34; padding: 0
+                    text: "↗"; font.family: theme.uiFont; font.pixelSize: 17
+                    enabled: !!selectedDocument().id && !backend.busy
+                    onClicked: openSelected()
+                    background: Rectangle { color: parent.hovered ? "#343940" : "transparent"; radius: 0 }
+                    ToolTip.visible: hovered
+                    ToolTip.text: qsTr("Open selected article (Enter)")
+                }
+                ToolButton {
+                    implicitWidth: 34; implicitHeight: 34; padding: 0
+                    text: "⟳"; font.family: theme.uiFont; font.pixelSize: 17
+                    enabled: !backend.busy
+                    onClicked: backend.refresh()
+                    background: Rectangle { color: parent.hovered ? "#343940" : "transparent"; radius: 0 }
+                    ToolTip.visible: hovered
+                    ToolTip.text: qsTr("Refresh (R)")
+                }
             }
             Item {
                 Layout.fillWidth: true
@@ -423,8 +537,10 @@ ApplicationWindow {
                     activeFocusOnTab: true
                     currentIndex: 0
                     highlightMoveDuration: 80
+                    onActiveFocusChanged: if (activeFocus && currentIndex >= 0) listItemSelected = true
                     delegate: ItemDelegate { font.family: theme.uiFont;
                     id: documentDelegate
+                    objectName: "documentRow"
                     required property int index
                     required property string id
                     required property string title
@@ -459,11 +575,24 @@ ApplicationWindow {
                         }
                     }
                     onClicked: {
-                        const row = backend.documents[index]
-                        activateDocument(index, row ? row.id : id)
+                        documentList.currentIndex = index
+                        selectedIndex = index
+                        listItemSelected = true
+                        documentList.forceActiveFocus()
+                    }
+                    Keys.onPressed: function(event) {
+                        if (!backend.busy && (event.key === Qt.Key_Return || event.key === Qt.Key_Enter)) {
+                            openSelected()
+                            event.accepted = true
+                        }
                     }
                     }
-                    onCurrentIndexChanged: if (currentIndex >= 0) selectedIndex = currentIndex
+                    onCurrentIndexChanged: {
+                        if (currentIndex >= 0) {
+                            selectedIndex = currentIndex
+                            listItemSelected = true
+                        }
+                    }
                     Keys.onPressed: function(event) {
                         if (backend.busy) return
                         if (event.key === Qt.Key_J || event.key === Qt.Key_Down) {
@@ -506,55 +635,59 @@ ApplicationWindow {
             Text { Layout.leftMargin: 18; Layout.bottomMargin: 12; text: qsTr("j/k move   ↵ open   Ctrl+← nav   ? shortcuts"); color: "#858a83"; font.family: theme.uiFont; font.pixelSize: 9 }
         }
 
-        Rectangle { Layout.fillHeight: true; width: 1; color: "#303238"; visible: reading }
+        Rectangle { Layout.fillHeight: true; width: 1; color: "#303238" }
 
         Item {
-            Layout.fillWidth: true
+            Layout.fillWidth: reading
             Layout.fillHeight: true
-            Layout.minimumWidth: 360
-            Layout.preferredWidth: 700
-            visible: reading
-            ColumnLayout {
+            Layout.minimumWidth: reading ? 620 : 270
+            Layout.preferredWidth: reading ? 1000 : 310
+            visible: true
+            RowLayout {
                 anchors.fill: parent
-                anchors.leftMargin: 54; anchors.rightMargin: 54; anchors.topMargin: 42; anchors.bottomMargin: 22
-                spacing: 13
-                RowLayout {
+                spacing: 0
+                ColumnLayout {
+                    visible: reading
                     Layout.fillWidth: true
-                    Button { Material.roundedScale: Material.NotRounded; font.family: theme.uiFont; text: "←  " + qsTr("Library"); flat: true; onClicked: reading = false }
+                    Layout.minimumWidth: 360
+                    Layout.fillHeight: true
+                    Layout.leftMargin: 30
+                    Layout.rightMargin: 25
+                    Layout.topMargin: 25
+                    Layout.bottomMargin: 18
+                    spacing: 13
+                    RowLayout {
+                    Layout.fillWidth: true
+                    Button { Material.roundedScale: Material.NotRounded; font.family: theme.uiFont; text: "←  " + qsTr("Library"); flat: true; onClicked: returnToLibrary() }
                     Item { Layout.fillWidth: true }
-                    Button { Material.roundedScale: Material.NotRounded; font.family: theme.uiFont; text: qsTr("Open in Reader"); flat: true; enabled: backend.selectedUrl.length > 0; onClicked: Qt.openUrlExternally(backend.selectedUrl) }
-                    Button { Material.roundedScale: Material.NotRounded; font.family: theme.uiFont;
-                        text: qsTr("Note")
-                        flat: true
-                        enabled: !!selectedDocument().id && !backend.busy
-                        onClicked: { noteEditor.text = backend.selectedNote; noteDialog.open() }
+                    Button {
+                        Material.roundedScale: Material.NotRounded; font.family: theme.uiFont
+                        text: qsTr("Inbox"); checkable: true; checked: documentLocation() === "new"
+                        enabled: !backend.busy && !checked
+                        onClicked: backend.moveDocument(selectedDocument().id || "", "new")
                     }
-                    Button { Material.roundedScale: Material.NotRounded; font.family: theme.uiFont; text: qsTr("Archive"); enabled: !backend.busy; onClicked: backend.archiveDocument(selectedDocument().id || "") }
-                }
-                Text { text: backend.selectedAuthor; color: "#aeb2aa"; font.family: theme.uiFont; font.pixelSize: 12 }
-                Text { text: backend.selectedTitle || qsTr("Select a document"); color: "#f1f2ed"; font.family: theme.uiFont; font.pixelSize: 26; font.weight: Font.DemiBold; wrapMode: Text.Wrap; Layout.fillWidth: true }
-                RowLayout {
+                    Button {
+                        Material.roundedScale: Material.NotRounded; font.family: theme.uiFont
+                        text: qsTr("Later"); checkable: true; checked: documentLocation() === "later"
+                        enabled: !backend.busy && !checked
+                        onClicked: backend.moveDocument(selectedDocument().id || "", "later")
+                    }
+                    Button {
+                        Material.roundedScale: Material.NotRounded; font.family: theme.uiFont
+                        text: qsTr("Archive"); checkable: true; checked: documentLocation() === "archive"
+                        enabled: !backend.busy && !checked
+                        onClicked: backend.moveDocument(selectedDocument().id || "", "archive")
+                    }
+                    Button { Material.roundedScale: Material.NotRounded; font.family: theme.uiFont; text: qsTr("Open in Reader"); flat: true; enabled: backend.selectedUrl.length > 0; onClicked: Qt.openUrlExternally(backend.selectedUrl) }
+                    }
+                    Text { text: backend.selectedAuthor; color: "#aeb2aa"; font.family: theme.uiFont; font.pixelSize: 12 }
+                    Text { text: backend.selectedTitle || qsTr("Select a document"); color: "#f1f2ed"; font.family: theme.uiFont; font.pixelSize: 26; font.weight: Font.DemiBold; wrapMode: Text.Wrap; Layout.fillWidth: true }
+                    RowLayout {
                     Layout.fillWidth: true
                     spacing: 8
-                    Text {
-                        text: backend.selectedTags.length > 0
-                            ? qsTr("Tags: %1").arg(backend.selectedTags.join(", "))
-                            : qsTr("No tags")
-                        color: "#9da198"
-                        font.family: theme.uiFont; font.pixelSize: 11
-                        elide: Text.ElideRight
-                        Layout.fillWidth: true
-                    }
-                    Button { Material.roundedScale: Material.NotRounded; font.family: theme.uiFont;
-                        text: qsTr("Edit tags")
-                        enabled: !backend.busy
-                        onClicked: {
-                            tagEditor.text = backend.selectedTags.join(", ")
-                            tagDialog.open()
-                        }
-                    }
                     Button { Material.roundedScale: Material.NotRounded; font.family: theme.uiFont;
                         text: qsTr("Highlight selection")
+                        objectName: "highlightSelectionButton"
                         enabled: !backend.busy && pendingHighlightText.trim().length > 0
                             && pendingHighlightDocumentId === (selectedDocument().id || "")
                         onPressed: cacheArticleSelection()
@@ -562,21 +695,16 @@ ApplicationWindow {
                         ToolTip.visible: hovered
                         ToolTip.text: qsTr("Save selection as a highlight (Ctrl+Shift+H)")
                     }
-                    Button { Material.roundedScale: Material.NotRounded; font.family: theme.uiFont;
-                        text: qsTr("Highlights (%1)").arg(backend.selectedHighlights.length)
-                        enabled: !backend.busy
-                        onClicked: highlightsDialog.open()
                     }
-                }
-                Label { font.family: theme.uiFont;
+                    Label { font.family: theme.uiFont;
                     visible: backend.error.length > 0
                     text: backend.error
                     color: "#ffb4ab"
                     wrapMode: Text.Wrap
                     Layout.fillWidth: true
                 }
-                Rectangle { Layout.fillWidth: true; height: 1; color: "#383b40" }
-                Item {
+                    Rectangle { Layout.fillWidth: true; height: 1; color: "#383b40" }
+                    Item {
                     id: articleScroll
                     Layout.fillWidth: true; Layout.fillHeight: true
                     Layout.topMargin: 6
@@ -589,6 +717,7 @@ ApplicationWindow {
                         boundsBehavior: Flickable.StopAtBounds
                         TextArea { Material.roundedScale: Material.NotRounded;
                             id: articleText
+                            objectName: "articleText"
                             text: backend.busy ? qsTr("Loading document…") : backend.formattedMarkdown(backend.selectedContent, theme.accent)
                             textFormat: TextEdit.RichText
                             width: Math.min(articleScroll.width, 760)
@@ -655,6 +784,297 @@ ApplicationWindow {
                                 Qt.callLater(function() { articleText.forceActiveFocus() })
                         }
                     }
+                    }
+                }
+                Rectangle { Layout.fillHeight: true; width: 1; color: "#34373c"; visible: reading }
+                ColumnLayout {
+                    id: metadataPane
+                    objectName: "documentMetadataPane"
+                    visible: !!selectedDocument().id
+                    Layout.preferredWidth: 310
+                    Layout.minimumWidth: 270
+                    Layout.maximumWidth: 360
+                    Layout.fillHeight: true
+                    spacing: 0
+                    TabBar {
+                        id: metadataTabs
+                        objectName: "metadataTabs"
+                        Layout.fillWidth: true
+                        background: Rectangle { color: "#1d2025" }
+                        TabButton { text: qsTr("Info"); font.family: theme.uiFont; objectName: "metadataInfoTab" }
+                        TabButton { text: backend.selectedHighlights.length > 0 ? qsTr("Notebook · %1").arg(backend.selectedHighlights.length) : qsTr("Notebook"); font.family: theme.uiFont; objectName: "metadataNotebookTab" }
+                    }
+                    ScrollView {
+                        id: metadataScroll
+                        Layout.fillWidth: true
+                        Layout.fillHeight: true
+                        clip: true
+                        ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
+                        background: Rectangle { color: "#1d2025" }
+                        ColumnLayout {
+                            x: 17
+                            y: 17
+                            width: metadataScroll.availableWidth - 34
+                            spacing: 14
+                            ColumnLayout {
+                                visible: metadataTabs.currentIndex === 0
+                                Layout.fillWidth: true
+                                spacing: 14
+                        Text { text: qsTr("DOCUMENT DETAILS"); color: "#91968e"; font.family: theme.uiFont; font.pixelSize: 10; font.bold: true; Layout.fillWidth: true }
+                        Text { text: backend.selectedTitle || qsTr("Untitled document"); color: "#e6e8e1"; font.family: theme.uiFont; font.pixelSize: 13; font.weight: Font.DemiBold; wrapMode: Text.Wrap; Layout.fillWidth: true }
+                        Text { visible: !!selectedDocument().summary; text: selectedDocument().summary || ""; color: "#c1c4bd"; font.family: theme.uiFont; font.pixelSize: 11; wrapMode: Text.Wrap; Layout.fillWidth: true }
+                        GridLayout {
+                            columns: 2
+                            columnSpacing: 10
+                            rowSpacing: 6
+                            Layout.fillWidth: true
+                            Text { text: qsTr("Author"); color: "#8d928a"; font.family: theme.uiFont; font.pixelSize: 10 }
+                            Text { text: backend.selectedAuthor || "—"; color: "#d2d5ce"; font.family: theme.uiFont; font.pixelSize: 10; wrapMode: Text.Wrap; Layout.fillWidth: true }
+                            Text { text: qsTr("Source"); color: "#8d928a"; font.family: theme.uiFont; font.pixelSize: 10 }
+                            Text { text: selectedDocument().site_name || selectedDocument().source || "—"; color: "#d2d5ce"; font.family: theme.uiFont; font.pixelSize: 10; wrapMode: Text.Wrap; Layout.fillWidth: true }
+                            Text { text: qsTr("Type"); color: "#8d928a"; font.family: theme.uiFont; font.pixelSize: 10 }
+                            Text { text: selectedDocument().category || "—"; color: "#d2d5ce"; font.family: theme.uiFont; font.pixelSize: 10; wrapMode: Text.Wrap; Layout.fillWidth: true }
+                            Text { text: qsTr("Location"); color: "#8d928a"; font.family: theme.uiFont; font.pixelSize: 10 }
+                            Text { text: selectedDocument().location || backend.location; color: "#d2d5ce"; font.family: theme.uiFont; font.pixelSize: 10; wrapMode: Text.Wrap; Layout.fillWidth: true }
+                            Text { text: qsTr("Reading time"); color: "#8d928a"; font.family: theme.uiFont; font.pixelSize: 10 }
+                            Text { text: selectedDocument().reading_time || selectedDocument().listening_time || "—"; color: "#d2d5ce"; font.family: theme.uiFont; font.pixelSize: 10; wrapMode: Text.Wrap; Layout.fillWidth: true }
+                        }
+                        Rectangle { Layout.fillWidth: true; height: 1; color: "#34373c" }
+                        Text { text: qsTr("TAGS"); color: "#91968e"; font.family: theme.uiFont; font.pixelSize: 10; font.bold: true; Layout.fillWidth: true }
+                        Flow {
+                            Layout.fillWidth: true
+                            spacing: 6
+                            Repeater {
+                                model: backend.selectedTags
+                                delegate: Rectangle {
+                                    required property string modelData
+                                    width: tagLabel.implicitWidth + (removeTag.visible ? 31 : 18)
+                                    height: 26
+                                    radius: 13
+                                    color: tagHover.hovered ? "#39402f" : "#2c3228"
+                                    border.color: "#46513b"
+                                    Row {
+                                        anchors.centerIn: parent
+                                        spacing: 4
+                                        Text { id: tagLabel; text: modelData; color: "#cbd8b8"; font.family: theme.uiFont; font.pixelSize: 10; anchors.verticalCenter: parent.verticalCenter }
+                                        ToolButton {
+                                            id: removeTag
+                                            text: "×"
+                                            visible: tagHover.hovered
+                                            width: visible ? 18 : 0
+                                            height: 20
+                                            padding: 0
+                                            font.pixelSize: 15
+                                            onClicked: removeDocumentTag(modelData)
+                                            ToolTip.visible: hovered
+                                            ToolTip.text: qsTr("Remove %1").arg(modelData)
+                                        }
+                                    }
+                                    HoverHandler { id: tagHover }
+                                }
+                            }
+                            Text { visible: backend.selectedTags.length === 0; text: qsTr("No tags"); color: "#858a83"; font.family: theme.uiFont; font.pixelSize: 10 }
+                        }
+                        RowLayout {
+                            Layout.fillWidth: true
+                            TextField { Material.roundedScale: Material.NotRounded; font.family: theme.uiFont;
+                                id: newDocumentTagEditor
+                                objectName: "newDocumentTagEditor"
+                                Layout.fillWidth: true
+                                placeholderText: qsTr("Add a tag")
+                                selectByMouse: true
+                                enabled: !backend.busy
+                                onAccepted: addDocumentTag()
+                            }
+                            Button { Material.roundedScale: Material.NotRounded; font.family: theme.uiFont;
+                                text: qsTr("Add")
+                                objectName: "addDocumentTagButton"
+                                enabled: !backend.busy && newDocumentTagEditor.text.trim().length > 0
+                                onClicked: addDocumentTag()
+                            }
+                        }
+                            }
+                            ColumnLayout {
+                                visible: metadataTabs.currentIndex === 1
+                                Layout.fillWidth: true
+                                spacing: 14
+                        Rectangle { Layout.fillWidth: true; height: 1; color: "#34373c" }
+                        Text { text: qsTr("DOCUMENT NOTE"); color: "#91968e"; font.family: theme.uiFont; font.pixelSize: 10; font.bold: true; Layout.fillWidth: true }
+                        TextArea { Material.roundedScale: Material.NotRounded; font.family: theme.uiFont;
+                            id: documentNoteEditor
+                            objectName: "documentNoteEditor"
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: 72
+                            placeholderText: qsTr("Add a note about this document…")
+                            wrapMode: TextEdit.Wrap
+                            selectByMouse: true
+                        }
+                        Button { Material.roundedScale: Material.NotRounded; font.family: theme.uiFont;
+                            text: qsTr("Save note")
+                            objectName: "saveDocumentNoteButton"
+                            enabled: !backend.busy
+                            Layout.fillWidth: true
+                            onClicked: backend.saveDocumentNote(selectedDocument().id || "", documentNoteEditor.text)
+                        }
+                        Rectangle { Layout.fillWidth: true; height: 1; color: "#34373c" }
+                        RowLayout {
+                            Layout.fillWidth: true
+                            Text { text: qsTr("HIGHLIGHTS"); color: "#91968e"; font.family: theme.uiFont; font.pixelSize: 10; font.bold: true; Layout.fillWidth: true }
+                            Text { text: backend.selectedHighlights.length; color: theme.accent; font.family: theme.uiFont; font.pixelSize: 10 }
+                        }
+                        Repeater {
+                            id: highlightRepeater
+                            objectName: "highlightRepeater"
+                            model: backend.selectedHighlights
+                            delegate: Rectangle {
+                                id: highlightCard
+                                objectName: "highlightCard"
+                                required property var modelData
+                                property bool editingNote: false
+                                property bool editingTags: false
+                                Layout.fillWidth: true
+                                implicitHeight: highlightColumn.implicitHeight + 20
+                                color: "#25292e"
+                                border.color: "#383d43"
+                                radius: Math.min(2, theme.radius)
+                                ColumnLayout {
+                                    id: highlightColumn
+                                    anchors.fill: parent
+                                    anchors.margins: 10
+                                    spacing: 7
+                                    Text {
+                                        text: highlightCard.modelData.text || qsTr("Highlight")
+                                        color: "#e5e6e0"
+                                        font.family: theme.uiFont; font.pixelSize: 11
+                                        wrapMode: Text.Wrap
+                                        Layout.fillWidth: true
+                                    }
+                                    Rectangle {
+                                        Layout.fillWidth: true
+                                        implicitHeight: Math.max(highlightNotePreview.implicitHeight + 20, 42)
+                                        radius: 3
+                                        color: "#1d2025"
+                                        border.color: "#343940"
+                                        visible: !highlightCard.editingNote
+                                        RowLayout {
+                                            anchors.fill: parent
+                                            anchors.margins: 10
+                                            Text {
+                                                id: highlightNotePreview
+                                                text: highlightCard.modelData.notes || qsTr("Add a note to this highlight…")
+                                                color: highlightCard.modelData.notes ? "#c6c9c2" : "#858a83"
+                                                font.family: theme.uiFont; font.pixelSize: 10
+                                                wrapMode: Text.Wrap
+                                                Layout.fillWidth: true
+                                            }
+                                            ToolButton {
+                                                text: highlightCard.modelData.notes ? qsTr("Edit") : qsTr("Add note")
+                                                font.family: theme.uiFont; font.pixelSize: 10
+                                                visible: highlightHover.hovered || highlightCard.editingNote
+                                                onClicked: { highlightNoteEditor.text = highlightCard.modelData.notes || ""; highlightCard.editingNote = true }
+                                            }
+                                        }
+                                    }
+                                    TextArea { Material.roundedScale: Material.NotRounded; font.family: theme.uiFont;
+                                        id: highlightNoteEditor
+                                        objectName: "highlightNoteEditor"
+                                        text: highlightCard.modelData.notes || ""
+                                        visible: highlightCard.editingNote
+                                        Layout.fillWidth: true
+                                        Layout.preferredHeight: 86
+                                        placeholderText: qsTr("Add context or a thought about this passage…")
+                                        wrapMode: TextEdit.Wrap
+                                        selectByMouse: true
+                                    }
+                                    RowLayout {
+                                        visible: highlightCard.editingNote
+                                        Layout.fillWidth: true
+                                        Item { Layout.fillWidth: true }
+                                        Button { Material.roundedScale: Material.NotRounded; font.family: theme.uiFont; text: qsTr("Cancel"); flat: true; onClicked: highlightCard.editingNote = false }
+                                        Button { Material.roundedScale: Material.NotRounded; font.family: theme.uiFont;
+                                            text: qsTr("Save note")
+                                            objectName: "saveHighlightNoteButton"
+                                            enabled: !backend.busy
+                                            onClicked: {
+                                                backend.saveHighlightNote(selectedDocument().id || "", highlightCard.modelData.id || "", highlightNoteEditor.text)
+                                                highlightCard.editingNote = false
+                                            }
+                                        }
+                                    }
+                                    RowLayout {
+                                        Layout.fillWidth: true
+                                        Text {
+                                            text: highlightCard.modelData.tags && highlightCard.modelData.tags.length > 0
+                                                ? qsTr("Tags: %1").arg(highlightCard.modelData.tags.join(", "))
+                                                : qsTr("No highlight tags")
+                                            color: theme.accent
+                                            font.family: theme.uiFont; font.pixelSize: 10
+                                            wrapMode: Text.Wrap
+                                            Layout.fillWidth: true
+                                        }
+                                        ToolButton {
+                                            text: highlightCard.editingTags ? qsTr("Done") : qsTr("Edit tags")
+                                            font.family: theme.uiFont; font.pixelSize: 10
+                                            visible: highlightHover.hovered || highlightCard.editingTags
+                                            onClicked: highlightCard.editingTags = !highlightCard.editingTags
+                                        }
+                                    }
+                                    RowLayout {
+                                        visible: highlightCard.editingTags
+                                        Layout.fillWidth: true
+                                        TextField { Material.roundedScale: Material.NotRounded; font.family: theme.uiFont;
+                                            id: highlightTagEditor
+                                            objectName: "highlightTagEditor"
+                                            Layout.fillWidth: true
+                                            placeholderText: qsTr("Add a tag")
+                                            selectByMouse: true
+                                        }
+                                        Button { Material.roundedScale: Material.NotRounded; font.family: theme.uiFont;
+                                            text: qsTr("Add")
+                                            objectName: "addHighlightTagButton"
+                                            enabled: !backend.busy && highlightTagEditor.text.trim().length > 0
+                                            onClicked: {
+                                                backend.addHighlightTags(selectedDocument().id || "", highlightCard.modelData.id || "", [highlightTagEditor.text])
+                                                highlightTagEditor.clear()
+                                            }
+                                        }
+                                    }
+                                    RowLayout {
+                                        visible: highlightCard.editingTags
+                                        Layout.fillWidth: true
+                                        TextField { Material.roundedScale: Material.NotRounded; font.family: theme.uiFont;
+                                            id: removeHighlightTagEditor
+                                            objectName: "removeHighlightTagEditor"
+                                            Layout.fillWidth: true
+                                            placeholderText: qsTr("Remove a tag")
+                                            selectByMouse: true
+                                        }
+                                        Button { Material.roundedScale: Material.NotRounded; font.family: theme.uiFont;
+                                            text: qsTr("Remove")
+                                            objectName: "removeHighlightTagButton"
+                                            enabled: !backend.busy && removeHighlightTagEditor.text.trim().length > 0
+                                            onClicked: {
+                                                backend.removeHighlightTags(selectedDocument().id || "", highlightCard.modelData.id || "", [removeHighlightTagEditor.text])
+                                                removeHighlightTagEditor.clear()
+                                            }
+                                        }
+                                    }
+                                    HoverHandler { id: highlightHover }
+                                }
+                            }
+                        }
+                        Text {
+                            visible: !backend.busy && backend.selectedHighlights.length === 0
+                            text: qsTr("No highlights yet. Select article text and save it with Highlight selection.")
+                            color: "#9da198"
+                            font.family: theme.uiFont; font.pixelSize: 10
+                            wrapMode: Text.Wrap
+                            Layout.fillWidth: true
+                        }
+                        Item { Layout.preferredHeight: 14 }
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -701,132 +1121,6 @@ ApplicationWindow {
     }
 
     Dialog { Material.roundedScale: Material.NotRounded;
-        id: noteDialog
-        modal: true
-        anchors.centerIn: parent
-        width: Math.min(560, window.width - 48)
-        title: qsTr("Document note")
-        standardButtons: Dialog.NoButton
-        onAccepted: backend.saveDocumentNote(selectedDocument().id || "", noteEditor.text)
-        contentItem: ColumnLayout {
-            Label { font.family: theme.uiFont;
-                text: qsTr("Saving replaces the current note. Leave it empty to clear it.")
-                wrapMode: Text.Wrap
-                Layout.fillWidth: true
-            }
-            TextArea { Material.roundedScale: Material.NotRounded; font.family: theme.uiFont;
-                id: noteEditor
-                objectName: "noteEditor"
-                Layout.fillWidth: true
-                Layout.preferredHeight: 220
-                placeholderText: qsTr("Write a note about this document…")
-                wrapMode: TextEdit.Wrap
-                selectByMouse: true
-            }
-        }
-        footer: RowLayout {
-            spacing: 8
-            Item { Layout.fillWidth: true }
-            Button { Material.roundedScale: Material.NotRounded; font.family: theme.uiFont; text: qsTr("Cancel"); flat: true; onClicked: noteDialog.reject() }
-            Button { Material.roundedScale: Material.NotRounded; font.family: theme.uiFont; text: qsTr("Save"); onClicked: noteDialog.accept() }
-        }
-    }
-
-    Dialog { Material.roundedScale: Material.NotRounded;
-        id: tagDialog
-        modal: true
-        anchors.centerIn: parent
-        width: Math.min(520, window.width - 48)
-        title: qsTr("Document tags")
-        standardButtons: Dialog.NoButton
-        onAccepted: backend.saveDocumentTags(selectedDocument().id || "", tagEditor.text.split(","))
-        contentItem: ColumnLayout {
-            Label { font.family: theme.uiFont;
-                text: qsTr("Enter tag names separated by commas. Saving replaces this document’s tag list.")
-                wrapMode: Text.Wrap
-                Layout.fillWidth: true
-            }
-            TextField { Material.roundedScale: Material.NotRounded; font.family: theme.uiFont;
-                id: tagEditor
-                Layout.fillWidth: true
-                placeholderText: qsTr("e.g. design, research")
-                selectByMouse: true
-            }
-        }
-        footer: RowLayout {
-            spacing: 8
-            Item { Layout.fillWidth: true }
-            Button { Material.roundedScale: Material.NotRounded; font.family: theme.uiFont; text: qsTr("Cancel"); flat: true; onClicked: tagDialog.reject() }
-            Button { Material.roundedScale: Material.NotRounded; font.family: theme.uiFont; text: qsTr("Save"); onClicked: tagDialog.accept() }
-        }
-    }
-
-    Dialog { Material.roundedScale: Material.NotRounded;
-        id: highlightsDialog
-        modal: true
-        anchors.centerIn: parent
-        width: Math.min(700, window.width - 48)
-        height: Math.min(620, window.height - 80)
-        title: qsTr("Article highlights")
-        standardButtons: Dialog.NoButton
-        contentItem: ListView {
-            clip: true
-            spacing: 8
-            model: backend.selectedHighlights
-            delegate: Rectangle {
-                required property var modelData
-                width: ListView.view.width
-                height: highlightColumn.implicitHeight + 24
-                radius: Math.min(2, theme.radius)
-                color: "#24272c"
-                Column {
-                    id: highlightColumn
-                    anchors.fill: parent
-                    anchors.margins: 12
-                    spacing: 7
-                    Text {
-                        text: modelData.text
-                        color: "#e5e6e0"
-                        font.family: theme.uiFont; font.pixelSize: 13
-                        wrapMode: Text.Wrap
-                        width: parent.width
-                    }
-                    Text {
-                        visible: !!modelData.notes
-                        text: modelData.notes || ""
-                        color: "#aeb2aa"
-                        font.family: theme.uiFont; font.pixelSize: 11
-                        wrapMode: Text.Wrap
-                        width: parent.width
-                    }
-                    Text {
-                        visible: modelData.tags && modelData.tags.length > 0
-                        text: modelData.tags ? qsTr("Tags: %1").arg(modelData.tags.join(", ")) : ""
-                        color: theme.accent
-                        font.family: theme.uiFont; font.pixelSize: 10
-                        wrapMode: Text.Wrap
-                        width: parent.width
-                    }
-                }
-            }
-            Text {
-                anchors.centerIn: parent
-                visible: backend.selectedHighlights.length === 0
-                text: qsTr("No highlights yet. Select text in the article and choose Highlight selection.")
-                color: "#9da198"
-                wrapMode: Text.Wrap
-                horizontalAlignment: Text.AlignHCenter
-                width: parent.width - 40
-            }
-        }
-        footer: RowLayout {
-            spacing: 8
-            Item { Layout.fillWidth: true }
-            Button { Material.roundedScale: Material.NotRounded; font.family: theme.uiFont; text: qsTr("Close"); onClicked: highlightsDialog.accept() }
-        }
-    }
-
-    Dialog { Material.roundedScale: Material.NotRounded;
         id: paletteDialog
         visible: showPalette
         modal: true
@@ -857,6 +1151,7 @@ ApplicationWindow {
 
     Dialog { Material.roundedScale: Material.NotRounded;
         id: helpDialog
+        objectName: "helpDialog"
         visible: showHelp
         modal: true
         anchors.centerIn: parent
@@ -885,7 +1180,7 @@ ApplicationWindow {
         footer: RowLayout {
             spacing: 8
             Item { Layout.fillWidth: true }
-            Button { Material.roundedScale: Material.NotRounded; font.family: theme.uiFont; text: qsTr("Close"); onClicked: helpDialog.accept() }
+            Button { Material.roundedScale: Material.NotRounded; font.family: theme.uiFont; text: qsTr("Close"); objectName: "helpCloseButton"; onClicked: helpDialog.accept() }
         }
     }
 

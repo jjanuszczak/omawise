@@ -7,4 +7,4 @@ mkdir -p "$BUILD_DIR"
 cd "$BUILD_DIR"
 qmake6 "$ROOT/tests/rwreader_tests.pro"
 make -j"$(nproc)"
-QT_QPA_PLATFORM=offscreen ./rwreader_tests
+QT_QPA_PLATFORM=offscreen QT_QPA_PLATFORMTHEME=generic ./rwreader_tests

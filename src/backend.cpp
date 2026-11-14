@@ -51,6 +51,21 @@ void Backend::setStatus(const QString &status) {
     emit statusChanged();
 }
 
+void Backend::updateDocumentRows(const QString &key, const QVariant &value) {
+    const auto update = [this, &key, &value](QVariantList &rows) {
+        for (QVariant &rowValue : rows) {
+            QVariantMap row = rowValue.toMap();
+            if (row.value("id").toString() != m_selectedId)
+                continue;
+            row.insert(key, value);
+            rowValue = row;
+        }
+    };
+    update(m_documents);
+    update(m_libraryDocuments);
+    emit documentsChanged();
+}
+
 void Backend::fail(const QString &message) {
     if (m_error == message)
         return;
@@ -130,7 +145,8 @@ void Backend::search(const QString &query) {
     run({"--json", "reader-search-documents", "--query", trimmed, "--limit", "50"}, Operation::Search);
 }
 
-void Backend::openDocument(const QString &id, const QString &title, const QString &author, const QString &url) {
+void Backend::openDocument(const QString &id, const QString &title, const QString &author, const QString &url,
+                           const QStringList &tags, const QString &note) {
     if (id.isEmpty())
         return;
     m_pendingId = id;
@@ -138,8 +154,8 @@ void Backend::openDocument(const QString &id, const QString &title, const QStrin
     m_selectedTitle = title;
     m_selectedAuthor = author;
     m_selectedUrl = url;
-    m_selectedNote.clear();
-    m_selectedTags.clear();
+    m_selectedNote = note;
+    m_selectedTags = tags;
     m_selectedHighlights.clear();
     m_selectedContent.clear();
     emit selectedDocumentChanged();
@@ -154,6 +170,16 @@ void Backend::archiveDocument(const QString &id) {
     m_pendingId = id;
     setStatus(tr("Archiving…"));
     run({"--json", "reader-move-documents", "--document-ids", id, "--location", "archive"}, Operation::Archive);
+}
+
+void Backend::moveDocument(const QString &id, const QString &location) {
+    static const QStringList allowedLocations{"new", "later", "archive"};
+    if (id.isEmpty() || !allowedLocations.contains(location))
+        return;
+    m_pendingId = id;
+    m_pendingLocation = location;
+    setStatus(tr("Moving document…"));
+    run({"--json", "reader-move-documents", "--document-ids", id, "--location", location}, Operation::Move);
 }
 
 void Backend::saveDocumentNote(const QString &id, const QString &note) {
@@ -206,6 +232,66 @@ void Backend::createHighlight(const QString &documentId, const QString &text) {
     setStatus(tr("Creating highlight…"));
     run({"--json", "reader-create-highlight", "--document-id", documentId,
          "--html-content", text}, Operation::CreateHighlight);
+}
+
+void Backend::saveHighlightNote(const QString &documentId, const QString &highlightId, const QString &note) {
+    if (documentId.isEmpty() || highlightId.isEmpty() || documentId != m_selectedId)
+        return;
+    m_pendingId = documentId;
+    m_pendingHighlightId = highlightId;
+    m_pendingHighlightNote = note;
+    setStatus(tr("Saving highlight note…"));
+    run({"--json", "reader-set-highlight-notes", "--document-id", documentId,
+         "--highlight-document-id", highlightId, "--notes", note}, Operation::SaveHighlightNote);
+}
+
+void Backend::addHighlightTags(const QString &documentId, const QString &highlightId, const QStringList &tags) {
+    if (documentId.isEmpty() || highlightId.isEmpty() || documentId != m_selectedId)
+        return;
+    QStringList cleaned;
+    for (const QString &tag : tags) {
+        const QString value = tag.trimmed();
+        bool duplicate = false;
+        for (const QString &existing : cleaned) {
+            if (existing.compare(value, Qt::CaseInsensitive) == 0) {
+                duplicate = true;
+                break;
+            }
+        }
+        if (!value.isEmpty() && !duplicate)
+            cleaned.append(value);
+    }
+    if (cleaned.isEmpty())
+        return;
+    QJsonArray payload = QJsonArray::fromStringList(cleaned);
+    m_pendingId = documentId;
+    m_pendingHighlightId = highlightId;
+    m_pendingHighlightTags = cleaned;
+    setStatus(tr("Adding highlight tags…"));
+    run({"--json", "reader-add-tags-to-highlight", "--document-id", documentId,
+         "--highlight-document-id", highlightId, "--tag-names",
+         QString::fromUtf8(QJsonDocument(payload).toJson(QJsonDocument::Compact))}, Operation::AddHighlightTags);
+}
+
+void Backend::removeHighlightTags(const QString &documentId, const QString &highlightId, const QStringList &tags) {
+    if (documentId.isEmpty() || highlightId.isEmpty() || documentId != m_selectedId || tags.isEmpty())
+        return;
+    QStringList cleaned;
+    for (const QString &tag : tags) {
+        const QString value = tag.trimmed();
+        if (!value.isEmpty() && !cleaned.contains(value, Qt::CaseInsensitive))
+            cleaned.append(value);
+    }
+    if (cleaned.isEmpty())
+        return;
+    const QJsonArray payload = QJsonArray::fromStringList(cleaned);
+    m_pendingId = documentId;
+    m_pendingHighlightId = highlightId;
+    m_pendingHighlightTags = cleaned;
+    setStatus(tr("Removing highlight tags…"));
+    run({"--json", "reader-remove-tags-from-highlight", "--document-id", documentId,
+         "--highlight-document-id", highlightId, "--tag-names",
+         QString::fromUtf8(QJsonDocument(payload).toJson(QJsonDocument::Compact))}, Operation::RemoveHighlightTags);
 }
 
 void Backend::loadHighlights() {
@@ -345,7 +431,7 @@ QVariantList Backend::resultRows(const QJsonDocument &document) {
             continue;
         const QJsonObject object = value.toObject();
         QVariantMap row;
-        for (const QString key : {"id", "title", "author", "source", "site_name", "category", "location", "summary", "reading_time", "listening_time", "word_count", "url", "source_url", "first_opened_at"}) {
+        for (const QString key : {"id", "title", "author", "source", "site_name", "category", "location", "summary", "reading_time", "listening_time", "word_count", "url", "source_url", "first_opened_at", "published_date", "saved_at", "reading_progress", "image_url", "notes", "tags"}) {
             if (!object.value(key).isUndefined() && !object.value(key).isNull())
                 row.insert(key, object.value(key).toVariant());
         }
@@ -455,13 +541,25 @@ void Backend::finish(int exitCode, QProcess::ExitStatus exitStatus) {
     }
 
     QJsonParseError parseError;
-    const QJsonDocument json = QJsonDocument::fromJson(standardOutput, &parseError);
+    const QJsonValue jsonValue = QJsonValue::fromJson(standardOutput, &parseError);
+    const QJsonDocument json = jsonValue.isObject()
+        ? QJsonDocument(jsonValue.toObject())
+        : jsonValue.isArray() ? QJsonDocument(jsonValue.toArray()) : QJsonDocument();
     if (operation == Operation::Detail && parseError.error != QJsonParseError::NoError) {
         // The CLI documents document details as Markdown; accept plain Markdown
         // output as well as JSON so the reader is resilient to CLI output modes.
         if (m_selectedTitle.isEmpty())
             m_selectedTitle = tr("Reader document");
         m_selectedContent = QString::fromUtf8(standardOutput);
+        emit selectedDocumentChanged();
+        setStatus(tr("Document opened"));
+        loadHighlights();
+        return;
+    }
+    if (operation == Operation::Detail && jsonValue.isString()) {
+        if (m_selectedTitle.isEmpty())
+            m_selectedTitle = tr("Reader document");
+        m_selectedContent = jsonValue.toString();
         emit selectedDocumentChanged();
         setStatus(tr("Document opened"));
         loadHighlights();
@@ -482,7 +580,9 @@ void Backend::finish(int exitCode, QProcess::ExitStatus exitStatus) {
             return;
         }
         if ((operation == Operation::SaveNote || operation == Operation::SaveTags
-             || operation == Operation::CreateHighlight) && root.value("success").isBool()
+             || operation == Operation::CreateHighlight || operation == Operation::SaveHighlightNote
+             || operation == Operation::AddHighlightTags || operation == Operation::RemoveHighlightTags)
+            && root.value("success").isBool()
             && !root.value("success").toBool()) {
             setStatus(tr("Readwise update failed"));
             fail(root.value("message").toString().isEmpty()
@@ -491,7 +591,9 @@ void Backend::finish(int exitCode, QProcess::ExitStatus exitStatus) {
             return;
         }
         if ((operation == Operation::SaveNote || operation == Operation::SaveTags
-             || operation == Operation::CreateHighlight) && root.value("results").isArray()) {
+             || operation == Operation::CreateHighlight || operation == Operation::SaveHighlightNote
+             || operation == Operation::AddHighlightTags || operation == Operation::RemoveHighlightTags)
+            && root.value("results").isArray()) {
             for (const QJsonValue &value : root.value("results").toArray()) {
                 const QJsonObject result = value.toObject();
                 if (!result.value("success").isBool() || result.value("success").toBool())
@@ -531,6 +633,28 @@ void Backend::finish(int exitCode, QProcess::ExitStatus exitStatus) {
         }
         m_documents = merged;
         emit documentsChanged();
+        setStatus(tr("Searching titles…"));
+        // The hybrid query can miss title matches. The CLI's dedicated
+        // title filter covers the full library independently of the loaded page.
+        run({"--json", "reader-search-documents", "--query", m_activeQuery,
+             "--title-search", m_activeQuery, "--limit", "50"}, Operation::TitleSearch);
+        break;
+    }
+    case Operation::TitleSearch: {
+        const QVariantList titleMatches = resultRows(json);
+        QVariantList merged = m_documents;
+        QSet<QString> seen;
+        for (const QVariant &row : merged)
+            seen.insert(row.toMap().value("id").toString());
+        for (const QVariant &row : titleMatches) {
+            const QString id = row.toMap().value("id").toString();
+            if (!id.isEmpty() && !seen.contains(id)) {
+                merged.append(row);
+                seen.insert(id);
+            }
+        }
+        m_documents = merged;
+        emit documentsChanged();
         setStatus(tr("%1 results").arg(m_documents.size()));
         if (m_documents.isEmpty())
             fail(tr("No matching documents."));
@@ -540,11 +664,14 @@ void Backend::finish(int exitCode, QProcess::ExitStatus exitStatus) {
         const QJsonObject object = unwrapObject(json);
         const QString title = object.value("title").toString();
         const QString author = object.value("author").toString();
-        m_selectedNote = object.value("notes").toString();
-        m_selectedTags.clear();
-        for (const QJsonValue &tag : object.value("tags").toArray()) {
-            if (tag.isString()) m_selectedTags.append(tag.toString());
-            else if (tag.isObject()) m_selectedTags.append(tag.toObject().value("name").toString());
+        if (!object.value("notes").isUndefined() && !object.value("notes").isNull())
+            m_selectedNote = object.value("notes").toString();
+        if (object.value("tags").isArray()) {
+            m_selectedTags.clear();
+            for (const QJsonValue &tag : object.value("tags").toArray()) {
+                if (tag.isString()) m_selectedTags.append(tag.toString());
+                else if (tag.isObject()) m_selectedTags.append(tag.toObject().value("name").toString());
+            }
         }
         if (!title.isEmpty()) m_selectedTitle = title;
         if (!author.isEmpty()) m_selectedAuthor = author;
@@ -576,15 +703,23 @@ void Backend::finish(int exitCode, QProcess::ExitStatus exitStatus) {
         setStatus(tr("Document archived"));
         refresh();
         break;
+    case Operation::Move:
+        updateDocumentRows("location", m_pendingLocation);
+        setStatus(tr("Document moved to %1").arg(m_pendingLocation));
+        m_pendingId.clear();
+        m_pendingLocation.clear();
+        break;
     case Operation::SaveNote:
         m_selectedNote = m_pendingNote;
         m_pendingNote.clear();
+        updateDocumentRows("notes", m_selectedNote);
         emit selectedDocumentChanged();
         setStatus(tr("Note saved"));
         break;
     case Operation::SaveTags:
         m_selectedTags = m_pendingTags;
         m_pendingTags.clear();
+        updateDocumentRows("tags", m_selectedTags);
         emit selectedDocumentChanged();
         setStatus(tr("Tags saved"));
         break;
@@ -609,6 +744,53 @@ void Backend::finish(int exitCode, QProcess::ExitStatus exitStatus) {
         loadHighlights();
         break;
         }
+    case Operation::SaveHighlightNote: {
+        QVariantList updated;
+        for (const QVariant &value : m_selectedHighlights) {
+            QVariantMap highlight = value.toMap();
+            if (highlight.value("id").toString() == m_pendingHighlightId)
+                highlight.insert("notes", m_pendingHighlightNote);
+            updated.append(highlight);
+        }
+        m_selectedHighlights = updated;
+        m_pendingHighlightId.clear();
+        m_pendingHighlightNote.clear();
+        emit selectedHighlightsChanged();
+        setStatus(tr("Highlight note saved"));
+        break;
+    }
+    case Operation::AddHighlightTags:
+    case Operation::RemoveHighlightTags: {
+        QVariantList updated;
+        for (const QVariant &value : m_selectedHighlights) {
+            QVariantMap highlight = value.toMap();
+            if (highlight.value("id").toString() == m_pendingHighlightId) {
+                QStringList tags = highlight.value("tags").toStringList();
+                if (operation == Operation::AddHighlightTags) {
+                    for (const QString &tag : m_pendingHighlightTags) {
+                        if (!tags.contains(tag, Qt::CaseInsensitive))
+                            tags.append(tag);
+                    }
+                } else {
+                    for (const QString &tag : m_pendingHighlightTags) {
+                        tags.removeAll(tag);
+                        for (int i = tags.size() - 1; i >= 0; --i) {
+                            if (tags.at(i).compare(tag, Qt::CaseInsensitive) == 0)
+                                tags.removeAt(i);
+                        }
+                    }
+                }
+                highlight.insert("tags", tags);
+            }
+            updated.append(highlight);
+        }
+        m_selectedHighlights = updated;
+        m_pendingHighlightId.clear();
+        m_pendingHighlightTags.clear();
+        emit selectedHighlightsChanged();
+        setStatus(operation == Operation::AddHighlightTags ? tr("Highlight tags added") : tr("Highlight tags removed"));
+        break;
+    }
     case Operation::None:
     case Operation::Login:
         break;

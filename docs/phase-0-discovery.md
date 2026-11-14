@@ -16,7 +16,7 @@
 |---|---|---|---|
 | Authenticate | OAuth browser login or token login | Token authorization header; token obtained from Readwise account | Prefer CLI for first-run login; confirm whether an app can securely reuse credentials without undocumented config access. |
 | Browse locations | List by `new`, `later`, `shortlist`, `archive`, `feed` | List supports location, category, tag, cursor, update time | Supported. CLI category list includes podcast/audiobook; public API docs should be checked for current category coverage. |
-| Search | Hybrid document search | No equivalent search endpoint documented on Reader API page | CLI is a useful supported search route. Confirm latency, pagination, and result fields. |
+| Search | Hybrid document search plus title, author, tag, note, summary, source, URL, date, category, and location filters | No equivalent search endpoint documented on Reader API page | CLI supports a dedicated title-search filter; the app runs it separately from hybrid search and merges unique IDs. Confirm latency and real-account result coverage. |
 | Read document | Details command returns Markdown | List can include `html_content`; details and content fields documented | Supported, but compare detail fidelity/types and body size. Don't request full bodies in list views. |
 | Save URL | `reader-create-document` | `POST /api/v3/save/` | Supported. |
 | Move / archive / shortlist | Move documents; bulk metadata edit | Update and bulk update | Supported. Bulk operations have rate limits and per-item errors to handle. |
@@ -33,7 +33,7 @@
 
 ## CLI inspection
 
-Read-only local inspection only; no account command or credential file was accessed. `readwise --help` reports JSON output support and commands for Reader search, document list/details/save, move, bulk metadata edit, tag management, highlight get/create/tag/note operations, and export/status polling. It also documents `readwise config set readonly true`, which exposes only read operations to agents and requires re-authentication to turn writes back on. `reader-list-documents --help` confirms cursor pagination and that document bodies are excluded unless explicitly requested.
+Read-only local inspection only; no account command or credential file was accessed. `readwise --help` reports JSON output support and commands for Reader search, document list/details/save, move, bulk metadata edit, tag management, highlight get/create/tag/note operations, and export/status polling. `reader-search-documents --help` confirms a dedicated `--title-search` option, which the app now invokes as a second query and merges with hybrid and loaded-page matches. It also documents `readwise config set readonly true`, which exposes only read operations to agents and requires re-authentication to turn writes back on. `reader-list-documents --help` confirms cursor pagination and that document bodies are excluded unless explicitly requested.
 
 ### Integration decision for the next phase
 
