@@ -2,7 +2,7 @@
 
 ## Project
 
-`rwreader` is an early native Readwise Reader client for Omarchy. It is a C++/Qt Quick app built with qmake. The initial functional slice lists and searches Reader documents, opens Markdown details, and archives a document through the official `readwise` CLI.
+`rwreader` is an early native Readwise Reader client for Omarchy. It is a C++/Qt Quick app built with qmake. It lists and searches Reader documents, opens Markdown details, edits document notes and tags, creates/reviews text highlights, and archives documents through the official `readwise` CLI.
 
 ## Build and launch
 
@@ -31,6 +31,7 @@
 - Search is submitted with Enter rather than on every keystroke. It combines CLI hybrid-search results with case-insensitive matches from the currently loaded document list so a visible title match is not lost to semantic ranking.
 - Document notes and tags are saved with `reader-bulk-edit-document-metadata`; preserve the fixed command allowlist and pass the document payload as a JSON argument. Article highlights use `reader-get-document-highlights` and `reader-create-highlight` with the selected passage. Do not promise precise PDF/EPUB highlight anchoring.
 - When reading, give article text keyboard focus. Up/down selects adjacent article paragraphs and `h` highlights the current selection; Shift+Arrow selects by character and Ctrl+Shift+Arrow extends selection by word. Keep pane-switch shortcuts from intercepting word navigation while reading; `Ctrl+Shift+H` saves the selection as a highlight.
+- The **Highlight selection** button caches the current selection before it takes focus; keep that cached passage scoped to the currently open document so the toolbar action and keyboard shortcut use the same text.
 - Keep generated qmake output under `build/`; do not commit binaries or generated build files.
 - `./bin/build` builds the app and runs the Qt Test backend suite through `./bin/test`. The suite uses a fake `readwise` executable; do not query a real account in routine development. Expand the tests as backend behavior changes. For QML interaction changes, also use a mock CLI and exercise keyboard focus, activation, search, and reader navigation.
 

@@ -28,6 +28,8 @@
 - Document tags are edited with the same bulk metadata command. Existing highlights load with `reader-get-document-highlights`; selecting article text and choosing **Highlight selection** creates a highlight with `reader-create-highlight`.
 - Article text receives focus when opened; up/down selects adjacent paragraphs and `h` highlights the current selection. `Shift+Arrow` selects by character, `Ctrl+Shift+Arrow` extends by word, and `Ctrl+Shift+H` saves the selection. Pane-switch shortcuts do not intercept arrows in reading mode.
 - The UI uses Omarchy's `monospace` fontconfig alias, square Material controls, and subtle surface corners to match native Omarchy plugins.
+- Modal note, tag, highlight, and help dialogs use custom square action buttons instead of Qt Material's rounded generated button boxes.
+- The highlight toolbar caches the selected passage before taking focus, scoped to the open document, so mouse selection is preserved for the click action.
 - Opening a document resets article scroll to the top and adds more top/bottom reading padding to prevent the first lines from appearing clipped.
 - `bin/run` rebuilds the application before launch, so use it to pick up source changes.
 
@@ -42,8 +44,9 @@ The user has an authenticated Readwise CLI. The app uses that existing CLI login
 
 ## Verification already performed
 
-- `./bin/build` succeeds with the available Qt 6.12 toolchain and runs the backend suite (5 test cases; all pass).
+- `./bin/build` succeeds with the available Qt 6.12 toolchain. The backend suite has 5 test methods and reports 7 Qt Test passes including setup and cleanup.
 - A temporary Qt Quick interaction harness outside the project used a fake CLI and verified: keyboard list movement, article activation by keyboard, sidebar navigation, live search for a term in a title, Escape from search, and article activation by click.
+- The app loads offscreen with a fake CLI after QML changes. Keyboard text selection, highlight button activation, modal footers, and highlight refresh have not yet been exercised in a checked-in interaction harness.
 - A grabbed offscreen mock article confirmed the article pane is visible and Markdown headings/body/list formatting render at the intended width.
 - No checked-in QML interaction harness exists yet; the prior temporary harness was removed after verification.
 - No authenticated Readwise account was queried during these checks.
@@ -56,15 +59,15 @@ The user has an authenticated Readwise CLI. The app uses that existing CLI login
 - The app is English-only. QML/C++ strings use translation wrappers, but Omarchy localization catalogs and live language switching remain unimplemented.
 - Startup, CLI spawn, detail load, and search latency have not been benchmarked against a real account.
 - The local development `PKGBUILD` and launcher assets exist, but the Arch package has not been built or installed as part of this handoff.
-- Git was initialized and the first commit was created by the user before this work; the current feature changes remain uncommitted.
+- The feature work is committed on `main` in `86d646b` (`Second commit`). The current edits to `AGENTS.md`, `README.md`, and this handoff are documentation updates and remain uncommitted.
 
 ## Suggested next steps
 
 1. Have the user relaunch with `./bin/run` and compare the same article with Readwise Web.
 2. If typography/content still differs, inspect a sanitized representative CLI detail response and decide whether more source HTML, images, or metadata is available from supported CLI/API surfaces.
 3. Validate account-backed search behavior (especially title matches beyond the loaded page) only with explicit user approval; consider adding a dedicated title-search command or pagination strategy.
-4. Add offscreen QML interaction coverage for search submission, keyboard focus, activation, and reader navigation; backend regressions now run through `./bin/build`.
-5. Validate highlight selection and refreshed highlight responses against real article content; exact matching and PDF/EPUB anchoring have not been tested against an account.
+4. Add offscreen QML interaction coverage for search submission, keyboard focus, activation, paragraph/word selection, highlight creation through both the shortcut and toolbar, and square modal footers. Backend regressions run through `./bin/build`.
+5. Validate highlight selection and refreshed highlight responses against real article content only with explicit account-test authorization; exact matching and PDF/EPUB anchoring have not been tested against an account.
 6. Compare rendered articles with Readwise Web using representative content and improve typography/HTML fidelity where supported source data allows it.
 7. Review the development PKGBUILD's source/build paths before using it to install.
 
