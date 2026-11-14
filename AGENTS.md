@@ -11,6 +11,7 @@
 - Package without installing: `./bin/package` invokes the checkout PKGBUILD with `makepkg`.
 - Install from this checkout: `./bin/install` invokes the PKGBUILD with `makepkg -fsi`. Review the packaging paths before changing or invoking it.
 - GitHub releases: update `pkgver` in `PKGBUILD`, commit, and push a matching `v<version>` tag. `.github/workflows/release.yml` builds/tests in Arch Linux and attaches the package to a GitHub Release. Releases currently target x86_64 Arch Linux/Omarchy.
+- Both package scripts set makepkg's `BUILDDIR` under ignored `build/makepkg/`; this is required because the default `src/` build directory would collide with the app's source folder, especially under `--cleanbuild`.
 - The app expects `readwise` on `PATH`. CLI login is user-managed with `readwise login`; the app offers that flow only after a CLI authentication error.
 
 ## Architecture

@@ -3,4 +3,6 @@ set -eu
 
 ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 cd "$ROOT"
+BUILDDIR="$ROOT/build/makepkg"
+export BUILDDIR
 exec makepkg -f "$@"

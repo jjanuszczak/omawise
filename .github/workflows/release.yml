@@ -36,7 +36,7 @@ jobs:
         run: runuser -u builder -- ./bin/build
 
       - name: Assemble Arch package
-        run: runuser -u builder -- makepkg --cleanbuild --noconfirm
+        run: runuser -u builder -- ./bin/package --cleanbuild --noconfirm
 
       - uses: actions/upload-artifact@v4
         with:

@@ -44,7 +44,7 @@
 
 ## Packaging and releases
 
-- `./bin/package` creates a local Arch package from the current checkout without installing it; `./bin/install` builds and installs the checkout through `makepkg`/`pacman`.
+- `./bin/package` creates a local Arch package from the current checkout without installing it; `./bin/install` builds and installs the checkout through `makepkg`/`pacman`. Both use `build/makepkg/` for makepkg's work directory so `--cleanbuild` cannot collide with the project's `src/` folder.
 - `.github/workflows/release.yml` runs on `v*` tags, verifies the tag equals `v<pkgver>`, builds and checks in Arch Linux, then creates a GitHub Release with the `.pkg.tar.zst` package attached.
 - To publish a release, update `pkgver` in `PKGBUILD`, commit, and push the matching tag. The package currently targets x86_64 Arch Linux/Omarchy. A user can install the downloaded asset with `sudo pacman -U ./omawise-*.pkg.tar.zst`.
 
