@@ -1,5 +1,6 @@
 #include <QGuiApplication>
 #include <QIcon>
+#include <QFont>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
 #include <QQuickStyle>
@@ -10,6 +11,9 @@
 
 int main(int argc, char *argv[]) {
     QGuiApplication app(argc, argv);
+    QFont appFont(QStringLiteral("monospace"));
+    appFont.setPointSize(12);
+    app.setFont(appFont);
     app.setApplicationName("rwreader");
     app.setApplicationVersion("0.1.0");
     app.setDesktopFileName("rwreader");

@@ -11,6 +11,7 @@ class Theme : public QObject {
     Q_PROPERTY(QString accent READ accent NOTIFY changed)
     Q_PROPERTY(QString accentForeground READ accentForeground NOTIFY changed)
     Q_PROPERTY(int radius READ radius NOTIFY changed)
+    Q_PROPERTY(QString uiFont READ uiFont CONSTANT)
 
 public:
     explicit Theme(QObject *parent = nullptr);
@@ -18,6 +19,7 @@ public:
     QString accent() const { return m_accent; }
     QString accentForeground() const;
     int radius() const { return m_radius; }
+    QString uiFont() const { return QStringLiteral("monospace"); }
 
 signals:
     void changed();

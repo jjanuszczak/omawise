@@ -1,0 +1,10 @@
+#!/bin/sh
+set -eu
+
+ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
+BUILD_DIR="$ROOT/build/tests"
+mkdir -p "$BUILD_DIR"
+cd "$BUILD_DIR"
+qmake6 "$ROOT/tests/rwreader_tests.pro"
+make -j"$(nproc)"
+QT_QPA_PLATFORM=offscreen ./rwreader_tests

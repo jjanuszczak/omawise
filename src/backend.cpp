@@ -9,7 +9,9 @@
 #include <QSet>
 #include <QColor>
 #include <QTextDocument>
+#include <QTextBlock>
 #include <QFont>
+#include <QGuiApplication>
 #include <QUrl>
 
 Backend::Backend(QObject *parent) : QObject(parent) {
@@ -87,12 +89,18 @@ void Backend::run(const QStringList &arguments, Operation operation) {
 
 void Backend::refresh() {
     m_activeQuery.clear();
-    setStatus(tr("Loading %1…").arg(m_location));
+    QString viewName = m_location;
+    if (m_location == "new") viewName = tr("Inbox");
+    else if (m_location == "later") viewName = tr("Later");
+    else if (m_location == "shortlist") viewName = tr("Shortlist");
+    else if (m_location == "archive") viewName = tr("Archive");
+    else if (m_location == "feed") viewName = tr("Feed");
+    setStatus(tr("Loading %1…").arg(viewName));
     run({"--json", "reader-list-documents", "--location", m_location, "--limit", "50"}, Operation::List);
 }
 
 void Backend::setLocation(const QString &location) {
-    static const QStringList allowed{"new", "later", "shortlist", "archive"};
+    static const QStringList allowed{"new", "later", "shortlist", "archive", "feed"};
     if (!allowed.contains(location) || m_location == location)
         return;
     m_location = location;
@@ -126,11 +134,16 @@ void Backend::openDocument(const QString &id, const QString &title, const QStrin
     if (id.isEmpty())
         return;
     m_pendingId = id;
+    m_selectedId = id;
     m_selectedTitle = title;
     m_selectedAuthor = author;
     m_selectedUrl = url;
+    m_selectedNote.clear();
+    m_selectedTags.clear();
+    m_selectedHighlights.clear();
     m_selectedContent.clear();
     emit selectedDocumentChanged();
+    emit selectedHighlightsChanged();
     setStatus(tr("Opening document…"));
     run({"--json", "reader-get-document-details", "--document-id", id}, Operation::Detail);
 }
@@ -143,6 +156,65 @@ void Backend::archiveDocument(const QString &id) {
     run({"--json", "reader-move-documents", "--document-ids", id, "--location", "archive"}, Operation::Archive);
 }
 
+void Backend::saveDocumentNote(const QString &id, const QString &note) {
+    if (id.isEmpty())
+        return;
+    QJsonObject document;
+    document.insert("document_id", id);
+    document.insert("notes", note);
+    QJsonArray documents;
+    documents.append(document);
+    const QString payload = QString::fromUtf8(QJsonDocument(documents).toJson(QJsonDocument::Compact));
+    m_pendingId = id;
+    m_pendingNote = note;
+    setStatus(tr("Saving note…"));
+    run({"--json", "reader-bulk-edit-document-metadata", "--documents", payload}, Operation::SaveNote);
+}
+
+void Backend::saveDocumentTags(const QString &id, const QStringList &tags) {
+    if (id.isEmpty())
+        return;
+    QStringList cleaned;
+    for (const QString &tag : tags) {
+        const QString value = tag.trimmed();
+        bool duplicate = false;
+        for (const QString &existing : cleaned) {
+            if (existing.compare(value, Qt::CaseInsensitive) == 0) {
+                duplicate = true;
+                break;
+            }
+        }
+        if (!value.isEmpty() && !duplicate)
+            cleaned.append(value);
+    }
+    QJsonObject document;
+    document.insert("document_id", id);
+    document.insert("tags", QJsonArray::fromStringList(cleaned));
+    QJsonArray documents;
+    documents.append(document);
+    const QString payload = QString::fromUtf8(QJsonDocument(documents).toJson(QJsonDocument::Compact));
+    m_pendingId = id;
+    m_pendingTags = cleaned;
+    setStatus(tr("Saving tags…"));
+    run({"--json", "reader-bulk-edit-document-metadata", "--documents", payload}, Operation::SaveTags);
+}
+
+void Backend::createHighlight(const QString &documentId, const QString &text) {
+    if (documentId.isEmpty() || text.trimmed().isEmpty())
+        return;
+    m_pendingId = documentId;
+    setStatus(tr("Creating highlight…"));
+    run({"--json", "reader-create-highlight", "--document-id", documentId,
+         "--html-content", text}, Operation::CreateHighlight);
+}
+
+void Backend::loadHighlights() {
+    if (m_selectedId.isEmpty())
+        return;
+    setStatus(tr("Loading highlights…"));
+    run({"--json", "reader-get-document-highlights", "--document-id", m_selectedId}, Operation::Highlights);
+}
+
 void Backend::login() {
     setStatus(tr("Waiting for Readwise login…"));
     run({"login"}, Operation::Login);
@@ -150,13 +222,20 @@ void Backend::login() {
 
 QString Backend::formattedMarkdown(const QString &markdown, const QString &accent) const {
     QTextDocument document;
-    document.setDefaultFont(QFont("Inter", 12));
+    QFont documentFont("monospace");
+    documentFont.setPointSize(12);
+    if (qobject_cast<QGuiApplication *>(QCoreApplication::instance())) {
+        documentFont = QGuiApplication::font();
+        if (documentFont.pixelSize() <= 0 && documentFont.pointSizeF() <= 0)
+            documentFont.setPointSize(12);
+    }
+    document.setDefaultFont(documentFont);
     const QColor accentColor(accent);
     const QString linkColor = accentColor.isValid() ? accentColor.name(QColor::HexRgb) : QStringLiteral("#FFD60A");
     document.setDefaultStyleSheet(QStringLiteral(R"CSS(
-        body { color: #d9dbd5; font-family: Inter, sans-serif; font-size: 13pt; }
+        body { color: #d9dbd5; font-family: monospace; font-size: 13pt; margin: 0; padding: 0; }
         p { margin-top: 0; margin-bottom: 15pt; }
-        h1 { color: #f2f3ee; font-size: 23pt; font-weight: 700; margin-top: 0; margin-bottom: 18pt; }
+        h1 { color: #f2f3ee; font-size: 23pt; font-weight: 700; margin-top: 8pt; margin-bottom: 18pt; }
         h2 { color: #eef0e9; font-size: 18pt; font-weight: 650; margin-top: 25pt; margin-bottom: 11pt; }
         h3 { color: #e7e9e2; font-size: 14pt; font-weight: 650; margin-top: 20pt; margin-bottom: 9pt; }
         h4, h5, h6 { color: #e2e4dd; font-size: 12pt; font-weight: 650; margin-top: 16pt; margin-bottom: 7pt; }
@@ -199,6 +278,51 @@ QString Backend::formattedMarkdown(const QString &markdown, const QString &accen
     return formattedHtml;
 }
 
+QVariantList Backend::selectedHeadings() const {
+    QVariantList headings;
+    QTextDocument document;
+    const QString trimmed = m_selectedContent.trimmed();
+    if (trimmed.startsWith("<!DOCTYPE html", Qt::CaseInsensitive)
+        || trimmed.startsWith("<html", Qt::CaseInsensitive)
+        || trimmed.startsWith("<article", Qt::CaseInsensitive)) {
+        document.setHtml(m_selectedContent);
+    } else {
+        document.setMarkdown(m_selectedContent);
+    }
+
+    for (QTextBlock block = document.begin(); block.isValid(); block = block.next()) {
+        const int level = block.blockFormat().headingLevel();
+        const QString text = block.text().trimmed();
+        if (level < 1 || text.isEmpty())
+            continue;
+        headings.append(QVariantMap{{"text", text}, {"level", level}, {"position", block.position()}});
+    }
+    return headings;
+}
+
+QVariantList Backend::selectedParagraphs() const {
+    QVariantList paragraphs;
+    QTextDocument document;
+    const QString trimmed = m_selectedContent.trimmed();
+    if (trimmed.startsWith("<!DOCTYPE html", Qt::CaseInsensitive)
+        || trimmed.startsWith("<html", Qt::CaseInsensitive)
+        || trimmed.startsWith("<article", Qt::CaseInsensitive)) {
+        document.setHtml(m_selectedContent);
+    } else {
+        document.setMarkdown(m_selectedContent);
+    }
+
+    for (QTextBlock block = document.begin(); block.isValid(); block = block.next()) {
+        const QString text = block.text();
+        if (text.trimmed().isEmpty())
+            continue;
+        paragraphs.append(QVariantMap{{"text", text},
+                                      {"position", block.position()},
+                                      {"length", text.length()}});
+    }
+    return paragraphs;
+}
+
 QVariantList Backend::resultRows(const QJsonDocument &document) {
     QJsonArray rows;
     if (document.isArray()) {
@@ -231,6 +355,57 @@ QVariantList Backend::resultRows(const QJsonDocument &document) {
         }
         if (!row.value("id").toString().isEmpty())
             result.append(row);
+    }
+    return result;
+}
+
+QVariantList Backend::highlightRows(const QJsonDocument &document) {
+    QJsonArray rows;
+    if (document.isArray()) {
+        rows = document.array();
+    } else if (document.isObject()) {
+        QJsonObject root = document.object();
+        for (const QString key : {"data", "result"}) {
+            if (root.value(key).isObject()) {
+                root = root.value(key).toObject();
+                break;
+            }
+        }
+        for (const QString key : {"highlights", "document_highlights", "results", "documents", "items"}) {
+            if (root.value(key).isArray()) {
+                rows = root.value(key).toArray();
+                break;
+            }
+        }
+        if (rows.isEmpty() && root.value("highlight").isObject())
+            rows.append(root.value("highlight"));
+        else if (rows.isEmpty() && (root.contains("id") || root.contains("highlight_id")))
+            rows.append(root);
+    }
+
+    QVariantList result;
+    for (const QJsonValue &value : rows) {
+        if (!value.isObject())
+            continue;
+        const QJsonObject object = value.toObject();
+        QString text;
+        for (const QString key : {"text", "content", "highlight", "highlight_text", "highlighted_text", "html_content"}) {
+            if (object.value(key).isString()) {
+                text = object.value(key).toString();
+                break;
+            }
+        }
+        QStringList tags;
+        for (const QJsonValue &tag : object.value("tags").toArray()) {
+            if (tag.isString()) tags.append(tag.toString());
+            else if (tag.isObject()) tags.append(tag.toObject().value("name").toString());
+        }
+        result.append(QVariantMap{
+            {"id", object.value("id").isUndefined() ? object.value("highlight_id").toVariant() : object.value("id").toVariant()},
+            {"text", text},
+            {"notes", object.value("notes").isUndefined() ? object.value("note").toString() : object.value("notes").toString()},
+            {"tags", tags}
+        });
     }
     return result;
 }
@@ -289,6 +464,7 @@ void Backend::finish(int exitCode, QProcess::ExitStatus exitStatus) {
         m_selectedContent = QString::fromUtf8(standardOutput);
         emit selectedDocumentChanged();
         setStatus(tr("Document opened"));
+        loadHighlights();
         return;
     }
     if (parseError.error != QJsonParseError::NoError) {
@@ -304,6 +480,30 @@ void Backend::finish(int exitCode, QProcess::ExitStatus exitStatus) {
             setStatus(tr("Readwise request failed"));
             fail(error.isEmpty() ? tr("The Readwise CLI returned an error.") : error);
             return;
+        }
+        if ((operation == Operation::SaveNote || operation == Operation::SaveTags
+             || operation == Operation::CreateHighlight) && root.value("success").isBool()
+            && !root.value("success").toBool()) {
+            setStatus(tr("Readwise update failed"));
+            fail(root.value("message").toString().isEmpty()
+                     ? tr("Readwise could not apply the requested update.")
+                     : root.value("message").toString());
+            return;
+        }
+        if ((operation == Operation::SaveNote || operation == Operation::SaveTags
+             || operation == Operation::CreateHighlight) && root.value("results").isArray()) {
+            for (const QJsonValue &value : root.value("results").toArray()) {
+                const QJsonObject result = value.toObject();
+                if (!result.value("success").isBool() || result.value("success").toBool())
+                    continue;
+                m_pendingNote.clear();
+                m_pendingTags.clear();
+                setStatus(tr("Readwise update failed"));
+                fail(result.value("error").toString().isEmpty()
+                         ? tr("Readwise could not apply the requested document update.")
+                         : result.value("error").toString());
+                return;
+            }
         }
     }
 
@@ -340,6 +540,12 @@ void Backend::finish(int exitCode, QProcess::ExitStatus exitStatus) {
         const QJsonObject object = unwrapObject(json);
         const QString title = object.value("title").toString();
         const QString author = object.value("author").toString();
+        m_selectedNote = object.value("notes").toString();
+        m_selectedTags.clear();
+        for (const QJsonValue &tag : object.value("tags").toArray()) {
+            if (tag.isString()) m_selectedTags.append(tag.toString());
+            else if (tag.isObject()) m_selectedTags.append(tag.toObject().value("name").toString());
+        }
         if (!title.isEmpty()) m_selectedTitle = title;
         if (!author.isEmpty()) m_selectedAuthor = author;
         for (const QString key : {"content", "markdown", "markdown_content", "document_content", "text"}) {
@@ -354,12 +560,55 @@ void Backend::finish(int exitCode, QProcess::ExitStatus exitStatus) {
             m_selectedContent = tr("The CLI returned document metadata without a Markdown body.");
         emit selectedDocumentChanged();
         setStatus(tr("Document opened"));
+        loadHighlights();
         break;
     }
+    case Operation::Highlights:
+        {
+        const QVariantList fetched = highlightRows(json);
+        if (!fetched.isEmpty() || m_selectedHighlights.isEmpty())
+            m_selectedHighlights = fetched;
+        emit selectedHighlightsChanged();
+        setStatus(tr("%1 highlights").arg(m_selectedHighlights.size()));
+        break;
+        }
     case Operation::Archive:
         setStatus(tr("Document archived"));
         refresh();
         break;
+    case Operation::SaveNote:
+        m_selectedNote = m_pendingNote;
+        m_pendingNote.clear();
+        emit selectedDocumentChanged();
+        setStatus(tr("Note saved"));
+        break;
+    case Operation::SaveTags:
+        m_selectedTags = m_pendingTags;
+        m_pendingTags.clear();
+        emit selectedDocumentChanged();
+        setStatus(tr("Tags saved"));
+        break;
+    case Operation::CreateHighlight:
+        {
+        const QVariantList created = highlightRows(json);
+        for (const QVariant &item : created) {
+            const QVariantMap highlight = item.toMap();
+            const QString id = highlight.value("id").toString();
+            bool alreadyPresent = false;
+            for (const QVariant &existing : m_selectedHighlights) {
+                if (!id.isEmpty() && existing.toMap().value("id").toString() == id) {
+                    alreadyPresent = true;
+                    break;
+                }
+            }
+            if (!alreadyPresent)
+                m_selectedHighlights.prepend(highlight);
+        }
+        emit selectedHighlightsChanged();
+        setStatus(tr("Highlight saved"));
+        loadHighlights();
+        break;
+        }
     case Operation::None:
     case Operation::Login:
         break;

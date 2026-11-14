@@ -15,7 +15,7 @@
 
 - `src/backend.{h,cpp}` owns app state and calls the CLI asynchronously with `QProcess`. Keep invocations on a fixed allowlist, pass argument arrays (never a shell string), and do not pass credentials in arguments.
 - `src/Main.qml` owns layout and interaction. Keep library/document navigation keyboard-accessible, preserve focus behavior, and update the shortcut overlay and README when bindings change.
-- `src/theme.{h,cpp}` follows Omarchy's accent color and Hyprland rounding.
+- `src/theme.{h,cpp}` follows Omarchy's accent color and reads Hyprland rounding; the UI uses Omarchy's `monospace` fontconfig alias and square Material controls, with only subtle rounding on small surfaces.
 - `prototype/reader-ux/` is the disconnected mock-data prototype from Phase 0; the active application is at the project root.
 - `docs/readwise-reader-omarchy-prd.md` is the product plan. `docs/phase-0-discovery.md` records API/CLI findings and known capability limits.
 - `docs/implementation-status.md` is the current handoff: what works, what was verified, known gaps, and next steps. Update it as the implementation moves forward.
@@ -28,9 +28,11 @@
 - Keep visible QML strings wrapped in `qsTr()` and C++ UI strings in `tr()`. The current interface is English-only; add and test Omarchy language catalogs before claiming localization support.
 - The Reader pane must receive an explicit minimum/preferred width in the root `RowLayout`; otherwise the document list can consume the remaining width and make a successful open look like a no-op. For reader-layout changes, inspect a grabbed window image after opening a mock document.
 - The reading body is converted from Markdown with `QTextDocument` styling, shown as selectable rich text in a centered 760 px column. When changing this renderer, check headings, body paragraphs, links, lists, blockquotes, and code with a multi-block mock article; QML rich text may override some link styling.
-- Search combines CLI hybrid-search results with case-insensitive matches from the currently loaded document list so a visible title match is not lost to semantic ranking.
+- Search is submitted with Enter rather than on every keystroke. It combines CLI hybrid-search results with case-insensitive matches from the currently loaded document list so a visible title match is not lost to semantic ranking.
+- Document notes and tags are saved with `reader-bulk-edit-document-metadata`; preserve the fixed command allowlist and pass the document payload as a JSON argument. Article highlights use `reader-get-document-highlights` and `reader-create-highlight` with the selected passage. Do not promise precise PDF/EPUB highlight anchoring.
+- When reading, give article text keyboard focus. Up/down selects adjacent article paragraphs and `h` highlights the current selection; Shift+Arrow selects by character and Ctrl+Shift+Arrow extends selection by word. Keep pane-switch shortcuts from intercepting word navigation while reading; `Ctrl+Shift+H` saves the selection as a highlight.
 - Keep generated qmake output under `build/`; do not commit binaries or generated build files.
-- There is no checked-in automated test suite yet. Build after code changes with `./bin/build`. For interaction changes, use a mock CLI and exercise keyboard focus, activation, search, and reader navigation before considering the change complete.
+- `./bin/build` builds the app and runs the Qt Test backend suite through `./bin/test`. The suite uses a fake `readwise` executable; do not query a real account in routine development. Expand the tests as backend behavior changes. For QML interaction changes, also use a mock CLI and exercise keyboard focus, activation, search, and reader navigation.
 
 ## Keep this guide current
 
