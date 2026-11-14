@@ -1,0 +1,61 @@
+name: Build and release Arch package
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:base-devel
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: pacman -Syu --noconfirm --needed git qt6-base qt6-declarative qt6-svg qt6-wayland
+
+      - name: Verify tag matches package version
+        run: |
+          pkgver="$(sed -n 's/^pkgver=//p' PKGBUILD)"
+          test "$GITHUB_REF_NAME" = "v$pkgver"
+
+      - name: Prepare unprivileged package builder
+        run: |
+          useradd --create-home --shell /bin/bash builder
+          chown -R builder:builder "$GITHUB_WORKSPACE"
+
+      - name: Build and run project checks
+        run: runuser -u builder -- ./bin/build
+
+      - name: Assemble Arch package
+        run: runuser -u builder -- makepkg --cleanbuild --noconfirm
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rwreader-package
+          path: '*.pkg.tar.zst'
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: rwreader-package
+          path: release-assets
+
+      - name: Create GitHub Release and upload package
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" release-assets/*.pkg.tar.zst --verify-tag --generate-notes --title "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY"

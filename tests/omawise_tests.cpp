@@ -46,13 +46,13 @@ void BackendTests::initTestCase() {
     QFile cli(m_binDir + "/readwise");
     QVERIFY(cli.open(QIODevice::WriteOnly | QIODevice::Text));
     cli.write("#!/bin/sh\n"
-              "printf '%s\\n' \"$*\" >> \"$RWREADER_TEST_LOG\"\n"
+              "printf '%s\\n' \"$*\" >> \"$OMAWISE_TEST_LOG\"\n"
               "case \"$*\" in\n"
-              "  *reader-bulk-edit-document-metadata*) if [ \"$RWREADER_NOTE_FAILURE\" = 1 ]; then printf '%s\\n' '{\"results\":[{\"id\":\"doc-42\",\"success\":false,\"error\":\"Document not found\"}]}' ; else printf '%s\\n' '{\"results\":[{\"id\":\"doc-42\",\"success\":true}]}' ; fi ;;\n"
+              "  *reader-bulk-edit-document-metadata*) if [ \"$OMAWISE_NOTE_FAILURE\" = 1 ]; then printf '%s\\n' '{\"results\":[{\"id\":\"doc-42\",\"success\":false,\"error\":\"Document not found\"}]}' ; else printf '%s\\n' '{\"results\":[{\"id\":\"doc-42\",\"success\":true}]}' ; fi ;;\n"
               "  *--title-search*) printf '%s\\n' '{\"results\":[{\"id\":\"title-only\",\"title\":\"Title-only result\"}]}' ;;\n"
               "  *reader-search-documents*) printf '%s\\n' '{\"results\":[{\"id\":\"remote\",\"title\":\"Remote result\"}]}' ;;\n"
-              "  *reader-list-documents*) if [ \"$RWREADER_AUTH_FAILURE\" = 1 ]; then printf '%s\\n' '401 Unauthorized' >&2; exit 1; else printf '%s\\n' '{\"results\":[{\"id\":\"local\",\"title\":\"Local article\",\"author\":\"A. Writer\"}]}' ; fi ;;\n"
-              "  *reader-get-document-details*) if [ \"$RWREADER_DETAIL_JSON_STRING\" = 1 ]; then printf '%s\\n' '\"# JSON article\\n\\nBody paragraph.\"' ; else printf '%s\\n' '# Article' '' 'First paragraph for selection.' '' 'Second paragraph for keyboard navigation.' ; fi ;;\n"
+              "  *reader-list-documents*) if [ \"$OMAWISE_AUTH_FAILURE\" = 1 ]; then printf '%s\\n' '401 Unauthorized' >&2; exit 1; else printf '%s\\n' '{\"results\":[{\"id\":\"local\",\"title\":\"Local article\",\"author\":\"A. Writer\"}]}' ; fi ;;\n"
+              "  *reader-get-document-details*) if [ \"$OMAWISE_DETAIL_JSON_STRING\" = 1 ]; then printf '%s\\n' '\"# JSON article\\n\\nBody paragraph.\"' ; else printf '%s\\n' '# Article' '' 'First paragraph for selection.' '' 'Second paragraph for keyboard navigation.' ; fi ;;\n"
               "  *reader-set-highlight-notes*) printf '%s\\n' '{\"success\":true}' ;;\n"
               "  *reader-add-tags-to-highlight*) printf '%s\\n' '{\"success\":true}' ;;\n"
               "  *reader-remove-tags-from-highlight*) printf '%s\\n' '{\"success\":true}' ;;\n"
@@ -66,7 +66,7 @@ void BackendTests::initTestCase() {
 
     m_originalPath = qgetenv("PATH");
     qputenv("PATH", (m_binDir.toLocal8Bit() + ":" + m_originalPath));
-    qputenv("RWREADER_TEST_LOG", m_logPath.toLocal8Bit());
+    qputenv("OMAWISE_TEST_LOG", m_logPath.toLocal8Bit());
 }
 
 void BackendTests::listAndFeedUseExpectedCliArguments() {
@@ -119,14 +119,14 @@ void BackendTests::moveDocumentUsesSupportedLocationCommand() {
 }
 
 void BackendTests::authenticationErrorsAreDetectedAndClearedOnRetry() {
-    qputenv("RWREADER_AUTH_FAILURE", "1");
+    qputenv("OMAWISE_AUTH_FAILURE", "1");
     Backend backend;
     backend.refresh();
     QTRY_VERIFY_WITH_TIMEOUT(!backend.busy(), 3000);
     QVERIFY(backend.authenticationRequired());
     QVERIFY(backend.error().contains("401 Unauthorized"));
 
-    qunsetenv("RWREADER_AUTH_FAILURE");
+    qunsetenv("OMAWISE_AUTH_FAILURE");
     backend.refresh();
     QVERIFY(!backend.authenticationRequired());
     QTRY_VERIFY_WITH_TIMEOUT(!backend.busy(), 3000);
@@ -146,13 +146,13 @@ void BackendTests::documentNoteUsesBulkMetadataCommand() {
 }
 
 void BackendTests::documentNoteReportsPerItemFailure() {
-    qputenv("RWREADER_NOTE_FAILURE", "1");
+    qputenv("OMAWISE_NOTE_FAILURE", "1");
     Backend backend;
     backend.saveDocumentNote("doc-42", "A careful note");
     QTRY_VERIFY_WITH_TIMEOUT(!backend.busy(), 3000);
     QVERIFY(backend.error().contains("Document not found"));
     QVERIFY(backend.selectedNote().isEmpty());
-    qunsetenv("RWREADER_NOTE_FAILURE");
+    qunsetenv("OMAWISE_NOTE_FAILURE");
 }
 
 void BackendTests::highlightMetadataUsesSupportedCliCommands() {
@@ -196,12 +196,12 @@ void BackendTests::markdownIsFormattedAsRichText() {
 }
 
 void BackendTests::detailAcceptsMarkdownJsonString() {
-    qputenv("RWREADER_DETAIL_JSON_STRING", "1");
+    qputenv("OMAWISE_DETAIL_JSON_STRING", "1");
     Backend backend;
     backend.openDocument("doc-json", "JSON detail", "", "");
     QTRY_COMPARE_WITH_TIMEOUT(backend.selectedContent(), QString("# JSON article\n\nBody paragraph."), 3000);
     QTRY_VERIFY_WITH_TIMEOUT(!backend.busy(), 3000);
-    qunsetenv("RWREADER_DETAIL_JSON_STRING");
+    qunsetenv("OMAWISE_DETAIL_JSON_STRING");
 }
 
 void BackendTests::qmlSearchActivationAndReaderSelection() {
@@ -323,12 +323,12 @@ void BackendTests::qmlSearchActivationAndReaderSelection() {
     QTRY_VERIFY_WITH_TIMEOUT(!backend.busy(), 3000);
 
     engine.rootObjects().first()->setProperty("reading", false);
-    qputenv("RWREADER_AUTH_FAILURE", "1");
+    qputenv("OMAWISE_AUTH_FAILURE", "1");
     backend.refresh();
     QTRY_VERIFY_WITH_TIMEOUT(!backend.busy(), 3000);
     QVERIFY(backend.authenticationRequired());
     QVERIFY(signInButton->property("visible").toBool());
-    qunsetenv("RWREADER_AUTH_FAILURE");
+    qunsetenv("OMAWISE_AUTH_FAILURE");
     QVERIFY(clickObject(signInButton));
     QTRY_VERIFY_WITH_TIMEOUT(!backend.busy(), 3000);
 
@@ -344,4 +344,4 @@ int main(int argc, char **argv) {
     return QTest::qExec(&tests, argc, argv);
 }
 
-#include "rwreader_tests.moc"
+#include "omawise_tests.moc"

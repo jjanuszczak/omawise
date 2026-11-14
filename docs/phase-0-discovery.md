@@ -41,7 +41,7 @@ Phase 1 uses the **CLI adapter** for the first vertical slice: fixed command all
 
 ## UX prototype
 
-`prototype/reader-ux/` contains the initial disconnected QML mock. The first functional app slice now lives at the project root (`src/`, `rwreader.pro`) and includes list/search/detail/archive calls via a fake CLI process for the offscreen launch. It compiles with Qt 6.12.0 and remained running in the headless smoke launch. No authenticated account was queried; response compatibility, keyboard events, and latency remain unverified against Readwise.
+`prototype/reader-ux/` contains the initial disconnected QML mock. The first functional app slice now lives at the project root (`src/`, `omawise.pro`) and includes list/search/detail/archive calls via a fake CLI process for the offscreen launch. It compiles with Qt 6.12.0 and remained running in the headless smoke launch. No authenticated account was queried; response compatibility, keyboard events, and latency remain unverified against Readwise.
 
 ## Open questions / Phase 1 gates
 

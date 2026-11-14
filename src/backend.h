@@ -67,6 +67,7 @@ public:
     Q_INVOKABLE void loadHighlights();
     Q_INVOKABLE void login();
     Q_INVOKABLE void clearError();
+    Q_INVOKABLE bool openExternalUrl(const QString &url);
     Q_INVOKABLE QString formattedMarkdown(const QString &markdown, const QString &accent) const;
 
 signals:

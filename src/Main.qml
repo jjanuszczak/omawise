@@ -10,7 +10,7 @@ ApplicationWindow {
     height: 880
     minimumWidth: 1140
     minimumHeight: 650
-    title: qsTr("Readwise Reader")
+    title: qsTr("Omawise")
     color: "#17191d"
     Material.theme: Material.Dark
     Material.accent: theme.accent
@@ -348,12 +348,8 @@ ApplicationWindow {
                 spacing: 17
                 RowLayout {
                     spacing: 10
-                    Rectangle {
-                        width: 30; height: 30; radius: Math.min(2, theme.radius)
-                        color: theme.accent
-                        Text { anchors.centerIn: parent; text: "R"; color: theme.accentForeground; font.bold: true; font.family: theme.uiFont; font.pixelSize: 17 }
-                    }
-                    Text { text: qsTr("Reader"); color: "#f0f1ed"; font.family: theme.uiFont; font.pixelSize: 18; font.weight: Font.DemiBold }
+                    Image { source: "qrc:/assets/omawise-mark.svg"; sourceSize.width: 36; sourceSize.height: 36; width: 36; height: 36; smooth: false }
+                    Text { text: qsTr("Omawise"); color: "#f0f1ed"; font.family: theme.uiFont; font.pixelSize: 18; font.weight: Font.DemiBold }
                 }
                 TextField { Material.roundedScale: Material.NotRounded; font.family: theme.uiFont;
                     id: searchField
@@ -753,6 +749,7 @@ ApplicationWindow {
                             readOnly: true
                             selectByMouse: true
                             activeFocusOnTab: true
+                            onLinkActivated: function(link) { backend.openExternalUrl(link) }
                             onCursorPositionChanged: {
                                 if (!keyboardSelecting) {
                                     keyboardSelectionAnchor = -1

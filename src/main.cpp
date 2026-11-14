@@ -14,10 +14,10 @@ int main(int argc, char *argv[]) {
     QFont appFont(QStringLiteral("monospace"));
     appFont.setPointSize(12);
     app.setFont(appFont);
-    app.setApplicationName("rwreader");
+    app.setApplicationName("omawise");
     app.setApplicationVersion("0.1.0");
-    app.setDesktopFileName("rwreader");
-    app.setWindowIcon(QIcon::fromTheme("rwreader"));
+    app.setDesktopFileName("omawise");
+    app.setWindowIcon(QIcon::fromTheme("omawise"));
     QQuickStyle::setStyle("Material");
 
     Theme theme;

@@ -5,6 +5,6 @@ ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 BUILD_DIR="$ROOT/build/tests"
 mkdir -p "$BUILD_DIR"
 cd "$BUILD_DIR"
-qmake6 "$ROOT/tests/rwreader_tests.pro"
+qmake6 "$ROOT/tests/omawise_tests.pro"
 make -j"$(nproc)"
-QT_QPA_PLATFORM=offscreen QT_QPA_PLATFORMTHEME=generic ./rwreader_tests
+QT_QPA_PLATFORM=offscreen QT_QPA_PLATFORMTHEME=generic ./omawise_tests

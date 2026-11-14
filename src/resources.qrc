@@ -1,5 +1,6 @@
 <RCC>
   <qresource prefix="/">
     <file>Main.qml</file>
+    <file alias="assets/omawise-mark.svg">../assets/omawise-mark.svg</file>
   </qresource>
 </RCC>

@@ -1,6 +1,6 @@
-# Readwise Reader for Omarchy
+# Omawise
 
-An early native Qt Quick client prototype for Omarchy. This Phase 1 vertical slice lists Reader documents, searches the library, opens Markdown document details, and archives the selected document through the official Readwise CLI.
+Omawise is an early native Qt Quick client for Readwise Reader on Omarchy. This Phase 1 vertical slice lists Reader documents, searches the library, opens Markdown document details, and archives the selected document through the official Readwise CLI.
 
 The app does not store or handle Readwise tokens. Install and authenticate the official CLI once, then launch the client:
 
@@ -11,6 +11,12 @@ readwise login
 ```
 
 Build and run the regression suite with `./bin/build`; run just the tests with `./bin/test`. The app invokes the CLI directly with `QProcess` and argument arrays (no shell), requests JSON for data commands, and surfaces CLI errors in the window. A **Sign in** action appears only after the CLI reports an authentication error.
+
+## Build and release packages
+
+On Arch/Omarchy, `./bin/package` builds an Omawise package from the current checkout without installing it. `./bin/install` builds and installs that checkout through `makepkg` and `pacman`. For a tagged GitHub release, update `pkgver` in `PKGBUILD`, commit the change, and push the matching tag (for example, `v0.2.0`). GitHub Actions builds and checks the app in an Arch Linux environment, then attaches the `.pkg.tar.zst` package to a GitHub Release. Downloaded release packages can be installed with `sudo pacman -U ./omawise-*.pkg.tar.zst`. Releases currently target x86_64 Arch Linux and Omarchy.
+
+The app icon and sidebar use the vector mark in `assets/omawise-mark.svg`; a horizontal wordmark for promotional use is in `marketing/omawise-logo.svg`.
 
 ## Shortcuts
 

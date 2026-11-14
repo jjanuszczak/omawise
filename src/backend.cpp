@@ -407,6 +407,16 @@ void Backend::login() {
     run({"login"}, Operation::Login);
 }
 
+bool Backend::openExternalUrl(const QString &value) {
+    const QUrl url(value, QUrl::StrictMode);
+    const QString scheme = url.scheme().toLower();
+    if (!url.isValid() || (scheme != "http" && scheme != "https" && scheme != "mailto"))
+        return false;
+    if ((scheme == "http" || scheme == "https") && url.host().isEmpty())
+        return false;
+    return QDesktopServices::openUrl(url);
+}
+
 QString Backend::formattedMarkdown(const QString &markdown, const QString &accent) const {
     QTextDocument document;
     QFont documentFont("monospace");

@@ -3,4 +3,4 @@ set -eu
 
 ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 "$ROOT/bin/build"
-exec "$ROOT/build/rwreader" "$@"
+exec "$ROOT/build/omawise" "$@"

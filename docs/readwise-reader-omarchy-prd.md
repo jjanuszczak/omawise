@@ -1,4 +1,4 @@
-# Omarchy Readwise Reader client: PRD and implementation plan
+# Omawise: PRD and implementation plan
 
 ## Product summary
 

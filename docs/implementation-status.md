@@ -6,16 +6,16 @@
 
 ## What exists
 
-- Native C++/Qt Quick application target `rwreader`, built with qmake (`rwreader.pro`).
+- Native C++/Qt Quick application target `omawise`, built with qmake (`omawise.pro`); the Arch package and desktop application are also named Omawise.
 - `src/backend.{h,cpp}` invokes the official Readwise CLI asynchronously using `QProcess` argument arrays; it does not shell out or handle credentials.
 - Current GUI actions: list Inbox/Later/Shortlist/Archive/Feed, hybrid search, local case-insensitive matching against the currently loaded documents, inspect selected-document metadata in the library or reading view, open an article separately, edit document notes/tags and individual highlight notes/tags, create and review text highlights, archive a document, and start CLI login.
 - Search runs only after Enter, avoiding repeated CLI launches while the user types; Escape clears the query and returns to the current view.
 - Keyboard navigation: `j/k` and arrows in the focused nav/list; Enter opens/activates; `/` focuses search; `Ctrl+K` opens the command palette; `Ctrl+←/→` changes focus between navigation and document list; `Ctrl+R` refreshes; `a` archives; `?` opens help.
 - The left pane switches from library navigation to an article table of contents while reading; the article view returns to the library list through its Back button or Escape. A bottom status bar shows current operation and errors, with a compact activity spinner; list and article loading also show a large centered spinner.
 - `src/theme.{h,cpp}` follows Omarchy accent color and Hyprland rounding.
-- `tests/rwreader_tests.cpp` contains Qt Test coverage for fake-CLI backend behavior and an offscreen QML interaction path. `bin/build` runs the suite after the application build.
+- `tests/omawise_tests.cpp` contains Qt Test coverage for fake-CLI backend behavior and an offscreen QML interaction path. `bin/build` runs the suite after the application build.
 - The reading view converts CLI Markdown using `QTextDocument`, then renders selectable rich text in a centered 760 px column with styled body text, headings, lists, code, and quotes.
-- `prototype/reader-ux/` is the original disconnected mock. The active app is the project-root `rwreader` target.
+- `prototype/reader-ux/` is the original disconnected mock. The active app is the project-root `omawise` target.
 - `docs/readwise-reader-omarchy-prd.md` contains the PRD and roadmap; `docs/phase-0-discovery.md` contains CLI/API discovery.
 
 ## Latest fixes
@@ -42,6 +42,12 @@
 ./bin/run
 ```
 
+## Packaging and releases
+
+- `./bin/package` creates a local Arch package from the current checkout without installing it; `./bin/install` builds and installs the checkout through `makepkg`/`pacman`.
+- `.github/workflows/release.yml` runs on `v*` tags, verifies the tag equals `v<pkgver>`, builds and checks in Arch Linux, then creates a GitHub Release with the `.pkg.tar.zst` package attached.
+- To publish a release, update `pkgver` in `PKGBUILD`, commit, and push the matching tag. The package currently targets x86_64 Arch Linux/Omarchy. A user can install the downloaded asset with `sudo pacman -U ./omawise-*.pkg.tar.zst`.
+
 The user has an authenticated Readwise CLI. The app uses that existing CLI login. Do not issue account calls during routine development; use a fake `readwise` executable for interaction checks unless the user explicitly asks to test against their account.
 
 ## Verification already performed
@@ -62,6 +68,7 @@ The user has an authenticated Readwise CLI. The app uses that existing CLI login
 - The app is English-only. QML/C++ strings use translation wrappers, but Omarchy localization catalogs and live language switching remain unimplemented.
 - Startup, CLI spawn, detail load, and search latency have not been benchmarked against a real account.
 - The local development package has been assembled successfully, but it has not been installed or launched from the installed package.
+- The tag-based GitHub release workflow and standalone `bin/package` command have been added but have not yet run in GitHub Actions. The first release should confirm the Arch container setup and artifact upload end to end.
 - The original feature work is committed on `main` in `86d646b` (`Second commit`), and the earlier contributor-guide/handoff updates are committed in `49b8df2` (`Docs update`). Current continuation changes to search, detail parsing, QML test hooks, and packaging are uncommitted.
 
 ## Suggested next steps
