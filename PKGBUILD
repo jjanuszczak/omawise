@@ -1,5 +1,5 @@
 pkgname=omawise
-pkgver=0.1.1
+pkgver=0.1.2
 pkgrel=1
 pkgdesc='Keyboard-first Readwise Reader client for Omarchy'
 arch=('x86_64')

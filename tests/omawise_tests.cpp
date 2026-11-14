@@ -286,6 +286,14 @@ void BackendTests::qmlSearchActivationAndReaderSelection() {
     QVERIFY(noteSave);
     QVERIFY(metadataTabs);
     metadataTabs->setProperty("currentIndex", 1);
+    auto *noteSaveItem = qobject_cast<QQuickItem *>(noteSave);
+    QVERIFY(noteSaveItem);
+    const auto noteSavePoint = [window, noteSaveItem] {
+        return noteSaveItem->mapToScene(
+            QPointF(noteSaveItem->width() / 2, noteSaveItem->height() / 2)).toPoint();
+    };
+    QTRY_VERIFY_WITH_TIMEOUT(
+        QRect(QPoint(0, 0), QSize(window->width(), window->height())).contains(noteSavePoint()), 2000);
     noteEditor->setProperty("text", QStringLiteral("A note from the metadata pane"));
     QVERIFY(clickObject(noteSave));
     QTRY_VERIFY_WITH_TIMEOUT(!backend.busy(), 3000);
