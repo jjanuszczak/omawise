@@ -26,8 +26,11 @@ Backend::Backend(QObject *parent) : QObject(parent) {
     });
     connect(&m_process, &QProcess::errorOccurred, this, [this](QProcess::ProcessError error) {
         if (error == QProcess::FailedToStart) {
+            const bool failedMetadata = m_operation == Operation::Highlights;
             setBusy(false);
             m_operation = Operation::None;
+            if (failedMetadata)
+                setMetadataBusy(false);
             fail(tr("Could not start the Readwise CLI. Install @readwise/cli and make sure 'readwise' is on PATH."));
         }
     });
@@ -42,6 +45,13 @@ void Backend::setBusy(bool busy) {
         return;
     m_busy = busy;
     emit busyChanged();
+}
+
+void Backend::setMetadataBusy(bool busy) {
+    if (m_metadataBusy == busy)
+        return;
+    m_metadataBusy = busy;
+    emit metadataBusyChanged();
 }
 
 void Backend::setStatus(const QString &status) {
@@ -67,6 +77,16 @@ void Backend::updateDocumentRows(const QString &key, const QVariant &value) {
 }
 
 void Backend::fail(const QString &message) {
+    const QString lower = message.toLower();
+    const bool authenticationRequired = lower.contains("unauthorized")
+        || lower.contains("unauthorised") || lower.contains("401")
+        || lower.contains("authentication required") || lower.contains("not authenticated")
+        || lower.contains("invalid token") || lower.contains("token expired")
+        || lower.contains("login required") || lower.contains("sign in required");
+    if (m_authenticationRequired != authenticationRequired) {
+        m_authenticationRequired = authenticationRequired;
+        emit authenticationRequiredChanged();
+    }
     if (m_error == message)
         return;
     m_error = message;
@@ -74,10 +94,12 @@ void Backend::fail(const QString &message) {
 }
 
 void Backend::clearError() {
-    if (m_error.isEmpty())
+    if (m_error.isEmpty() && !m_authenticationRequired)
         return;
     m_error.clear();
+    m_authenticationRequired = false;
     emit errorChanged();
+    emit authenticationRequiredChanged();
 }
 
 void Backend::run(const QStringList &arguments, Operation operation) {
@@ -87,6 +109,8 @@ void Backend::run(const QStringList &arguments, Operation operation) {
     clearError();
     const QString executable = QStandardPaths::findExecutable("readwise");
     if (executable.isEmpty()) {
+        if (operation == Operation::Highlights)
+            setMetadataBusy(false);
         setStatus(tr("Readwise CLI not found"));
         fail(tr("Install the official Readwise CLI with npm install -g @readwise/cli, then restart this app."));
         return;
@@ -149,19 +173,49 @@ void Backend::openDocument(const QString &id, const QString &title, const QStrin
                            const QStringList &tags, const QString &note) {
     if (id.isEmpty())
         return;
+    selectDocument(id, title, author, url, tags, note);
+    if (m_contentCache.contains(id)) {
+        m_selectedContent = m_contentCache.value(id);
+        emit selectedDocumentChanged();
+        setStatus(tr("Document opened"));
+        loadHighlights();
+        return;
+    }
+    if (m_process.state() != QProcess::NotRunning) {
+        m_hasQueuedOpen = true;
+        m_queuedOpenId = id;
+        m_queuedOpenTitle = title;
+        m_queuedOpenAuthor = author;
+        m_queuedOpenUrl = url;
+        m_queuedOpenTags = tags;
+        m_queuedOpenNote = note;
+        setStatus(tr("Opening document after current request…"));
+        return;
+    }
     m_pendingId = id;
+    m_selectedContent.clear();
+    emit selectedDocumentChanged();
+    setStatus(tr("Opening document…"));
+    run({"--json", "reader-get-document-details", "--document-id", id}, Operation::Detail);
+}
+
+void Backend::selectDocument(const QString &id, const QString &title, const QString &author, const QString &url,
+                             const QStringList &tags, const QString &note) {
+    if (id.isEmpty())
+        return;
     m_selectedId = id;
     m_selectedTitle = title;
     m_selectedAuthor = author;
     m_selectedUrl = url;
     m_selectedNote = note;
     m_selectedTags = tags;
-    m_selectedHighlights.clear();
-    m_selectedContent.clear();
+    m_selectedContent = m_contentCache.value(id);
+    if (m_highlightsLoaded.contains(id))
+        m_selectedHighlights = m_highlightsCache.value(id);
+    else
+        m_selectedHighlights.clear();
     emit selectedDocumentChanged();
     emit selectedHighlightsChanged();
-    setStatus(tr("Opening document…"));
-    run({"--json", "reader-get-document-details", "--document-id", id}, Operation::Detail);
 }
 
 void Backend::archiveDocument(const QString &id) {
@@ -297,8 +351,55 @@ void Backend::removeHighlightTags(const QString &documentId, const QString &high
 void Backend::loadHighlights() {
     if (m_selectedId.isEmpty())
         return;
+    const QString requestedId = m_selectedId;
+    if (m_highlightsLoaded.contains(requestedId)) {
+        m_selectedHighlights = m_highlightsCache.value(requestedId);
+        emit selectedHighlightsChanged();
+        if (m_operation != Operation::Highlights)
+            setMetadataBusy(false);
+        if (m_queuedHighlightId == requestedId)
+            m_queuedHighlightId.clear();
+        return;
+    }
+    if (m_process.state() != QProcess::NotRunning) {
+        if (m_operation == Operation::Highlights && m_pendingId == requestedId) {
+            m_queuedHighlightId.clear();
+            setMetadataBusy(true);
+            return;
+        }
+        m_queuedHighlightId = requestedId;
+        setMetadataBusy(true);
+        return;
+    }
+    m_pendingId = requestedId;
+    setMetadataBusy(true);
     setStatus(tr("Loading highlights…"));
-    run({"--json", "reader-get-document-highlights", "--document-id", m_selectedId}, Operation::Highlights);
+    run({"--json", "reader-get-document-highlights", "--document-id", requestedId}, Operation::Highlights);
+}
+
+void Backend::processQueuedWork() {
+    if (m_process.state() != QProcess::NotRunning)
+        return;
+    if (m_hasQueuedOpen) {
+        const QString id = m_queuedOpenId;
+        const QString title = m_queuedOpenTitle;
+        const QString author = m_queuedOpenAuthor;
+        const QString url = m_queuedOpenUrl;
+        const QStringList tags = m_queuedOpenTags;
+        const QString note = m_queuedOpenNote;
+        m_hasQueuedOpen = false;
+        m_queuedHighlightId.clear();
+        openDocument(id, title, author, url, tags, note);
+        return;
+    }
+    if (!m_queuedHighlightId.isEmpty()) {
+        const QString queuedId = m_queuedHighlightId;
+        m_queuedHighlightId.clear();
+        if (queuedId == m_selectedId)
+            loadHighlights();
+        else
+            setMetadataBusy(false);
+    }
 }
 
 void Backend::login() {
@@ -510,6 +611,7 @@ QJsonObject Backend::unwrapObject(const QJsonDocument &document) {
 }
 
 void Backend::finish(int exitCode, QProcess::ExitStatus exitStatus) {
+    QTimer::singleShot(0, this, &Backend::processQueuedWork);
     m_timeout.stop();
     const Operation operation = m_operation;
     m_operation = Operation::None;
@@ -519,12 +621,16 @@ void Backend::finish(int exitCode, QProcess::ExitStatus exitStatus) {
 
     if (m_timedOut) {
         m_timedOut = false;
+        if (operation == Operation::Highlights)
+            setMetadataBusy(false);
         setStatus(tr("Readwise request timed out"));
         fail(tr("The Readwise CLI did not respond before the timeout."));
         return;
     }
 
     if (exitStatus != QProcess::NormalExit || exitCode != 0) {
+        if (operation == Operation::Highlights)
+            setMetadataBusy(false);
         setStatus(tr("Readwise request failed"));
         if (operation == Operation::Search && !m_localSearchMatches.isEmpty()) {
             m_documents = m_localSearchMatches;
@@ -548,24 +654,36 @@ void Backend::finish(int exitCode, QProcess::ExitStatus exitStatus) {
     if (operation == Operation::Detail && parseError.error != QJsonParseError::NoError) {
         // The CLI documents document details as Markdown; accept plain Markdown
         // output as well as JSON so the reader is resilient to CLI output modes.
+        const QString detailId = m_pendingId;
+        const QString content = QString::fromUtf8(standardOutput);
+        m_contentCache.insert(detailId, content);
+        if (m_selectedId != detailId)
+            return;
         if (m_selectedTitle.isEmpty())
             m_selectedTitle = tr("Reader document");
-        m_selectedContent = QString::fromUtf8(standardOutput);
+        m_selectedContent = content;
         emit selectedDocumentChanged();
         setStatus(tr("Document opened"));
         loadHighlights();
         return;
     }
     if (operation == Operation::Detail && jsonValue.isString()) {
+        const QString detailId = m_pendingId;
+        const QString content = jsonValue.toString();
+        m_contentCache.insert(detailId, content);
+        if (m_selectedId != detailId)
+            return;
         if (m_selectedTitle.isEmpty())
             m_selectedTitle = tr("Reader document");
-        m_selectedContent = jsonValue.toString();
+        m_selectedContent = content;
         emit selectedDocumentChanged();
         setStatus(tr("Document opened"));
         loadHighlights();
         return;
     }
     if (parseError.error != QJsonParseError::NoError) {
+        if (operation == Operation::Highlights)
+            setMetadataBusy(false);
         setStatus(tr("Unexpected CLI response"));
         fail(tr("The Readwise CLI returned unrecognized data."));
         return;
@@ -575,6 +693,8 @@ void Backend::finish(int exitCode, QProcess::ExitStatus exitStatus) {
         const QJsonObject root = json.object();
         const QString error = root.value("error").toString();
         if (root.value("isError").toBool() || !error.isEmpty()) {
+            if (operation == Operation::Highlights)
+                setMetadataBusy(false);
             setStatus(tr("Readwise request failed"));
             fail(error.isEmpty() ? tr("The Readwise CLI returned an error.") : error);
             return;
@@ -661,6 +781,9 @@ void Backend::finish(int exitCode, QProcess::ExitStatus exitStatus) {
         break;
     }
     case Operation::Detail: {
+        const QString detailId = m_pendingId;
+        if (m_selectedId != detailId)
+            break;
         const QJsonObject object = unwrapObject(json);
         const QString title = object.value("title").toString();
         const QString author = object.value("author").toString();
@@ -675,16 +798,19 @@ void Backend::finish(int exitCode, QProcess::ExitStatus exitStatus) {
         }
         if (!title.isEmpty()) m_selectedTitle = title;
         if (!author.isEmpty()) m_selectedAuthor = author;
+        QString content;
         for (const QString key : {"content", "markdown", "markdown_content", "document_content", "text"}) {
             if (object.value(key).isString() && !object.value(key).toString().isEmpty()) {
-                m_selectedContent = object.value(key).toString();
+                content = object.value(key).toString();
                 break;
             }
         }
         const QString url = object.value("url").toString();
         if (!url.isEmpty()) m_selectedUrl = url;
-        if (m_selectedContent.isEmpty())
-            m_selectedContent = tr("The CLI returned document metadata without a Markdown body.");
+        if (content.isEmpty())
+            content = tr("The CLI returned document metadata without a Markdown body.");
+        m_contentCache.insert(detailId, content);
+        m_selectedContent = content;
         emit selectedDocumentChanged();
         setStatus(tr("Document opened"));
         loadHighlights();
@@ -692,11 +818,17 @@ void Backend::finish(int exitCode, QProcess::ExitStatus exitStatus) {
     }
     case Operation::Highlights:
         {
+        const QString highlightsId = m_pendingId;
         const QVariantList fetched = highlightRows(json);
-        if (!fetched.isEmpty() || m_selectedHighlights.isEmpty())
+        m_highlightsCache.insert(highlightsId, fetched);
+        m_highlightsLoaded.insert(highlightsId);
+        if (m_selectedId == highlightsId) {
             m_selectedHighlights = fetched;
-        emit selectedHighlightsChanged();
-        setStatus(tr("%1 highlights").arg(m_selectedHighlights.size()));
+            emit selectedHighlightsChanged();
+        }
+        if (m_queuedHighlightId.isEmpty())
+            setMetadataBusy(false);
+        setStatus(tr("%1 highlights").arg(fetched.size()));
         break;
         }
     case Operation::Archive:
@@ -740,7 +872,11 @@ void Backend::finish(int exitCode, QProcess::ExitStatus exitStatus) {
                 m_selectedHighlights.prepend(highlight);
         }
         emit selectedHighlightsChanged();
+        m_highlightsCache.insert(m_selectedId, m_selectedHighlights);
+        m_highlightsLoaded.insert(m_selectedId);
         setStatus(tr("Highlight saved"));
+        m_highlightsLoaded.remove(m_selectedId);
+        m_highlightsCache.remove(m_selectedId);
         loadHighlights();
         break;
         }
@@ -753,6 +889,8 @@ void Backend::finish(int exitCode, QProcess::ExitStatus exitStatus) {
             updated.append(highlight);
         }
         m_selectedHighlights = updated;
+        m_highlightsCache.insert(m_selectedId, m_selectedHighlights);
+        m_highlightsLoaded.insert(m_selectedId);
         m_pendingHighlightId.clear();
         m_pendingHighlightNote.clear();
         emit selectedHighlightsChanged();
@@ -785,6 +923,8 @@ void Backend::finish(int exitCode, QProcess::ExitStatus exitStatus) {
             updated.append(highlight);
         }
         m_selectedHighlights = updated;
+        m_highlightsCache.insert(m_selectedId, m_selectedHighlights);
+        m_highlightsLoaded.insert(m_selectedId);
         m_pendingHighlightId.clear();
         m_pendingHighlightTags.clear();
         emit selectedHighlightsChanged();

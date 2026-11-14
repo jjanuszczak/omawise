@@ -3,7 +3,9 @@
 #include <QProcess>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QHash>
 #include <QObject>
+#include <QSet>
 #include <QStringList>
 #include <QVariantList>
 #include <QTimer>
@@ -12,7 +14,9 @@ class Backend : public QObject {
     Q_OBJECT
     Q_PROPERTY(QVariantList documents READ documents NOTIFY documentsChanged)
     Q_PROPERTY(bool busy READ busy NOTIFY busyChanged)
+    Q_PROPERTY(bool metadataBusy READ metadataBusy NOTIFY metadataBusyChanged)
     Q_PROPERTY(QString error READ error NOTIFY errorChanged)
+    Q_PROPERTY(bool authenticationRequired READ authenticationRequired NOTIFY authenticationRequiredChanged)
     Q_PROPERTY(QString status READ status NOTIFY statusChanged)
     Q_PROPERTY(QString selectedTitle READ selectedTitle NOTIFY selectedDocumentChanged)
     Q_PROPERTY(QString selectedAuthor READ selectedAuthor NOTIFY selectedDocumentChanged)
@@ -30,7 +34,9 @@ public:
 
     QVariantList documents() const { return m_documents; }
     bool busy() const { return m_busy; }
+    bool metadataBusy() const { return m_metadataBusy; }
     QString error() const { return m_error; }
+    bool authenticationRequired() const { return m_authenticationRequired; }
     QString status() const { return m_status; }
     QString selectedTitle() const { return m_selectedTitle; }
     QString selectedAuthor() const { return m_selectedAuthor; }
@@ -48,6 +54,8 @@ public:
     Q_INVOKABLE void search(const QString &query);
     Q_INVOKABLE void openDocument(const QString &id, const QString &title, const QString &author, const QString &url,
                                   const QStringList &tags = {}, const QString &note = {});
+    Q_INVOKABLE void selectDocument(const QString &id, const QString &title, const QString &author, const QString &url,
+                                    const QStringList &tags = {}, const QString &note = {});
     Q_INVOKABLE void archiveDocument(const QString &id);
     Q_INVOKABLE void moveDocument(const QString &id, const QString &location);
     Q_INVOKABLE void saveDocumentNote(const QString &id, const QString &note);
@@ -64,7 +72,9 @@ public:
 signals:
     void documentsChanged();
     void busyChanged();
+    void metadataBusyChanged();
     void errorChanged();
+    void authenticationRequiredChanged();
     void statusChanged();
     void selectedDocumentChanged();
     void selectedHighlightsChanged();
@@ -76,8 +86,10 @@ private:
     void finish(int exitCode, QProcess::ExitStatus exitStatus);
     void fail(const QString &message);
     void setBusy(bool busy);
+    void setMetadataBusy(bool busy);
     void setStatus(const QString &status);
     void updateDocumentRows(const QString &key, const QVariant &value);
+    void processQueuedWork();
     static QVariantList resultRows(const QJsonDocument &document);
     static QVariantList highlightRows(const QJsonDocument &document);
     static QJsonObject unwrapObject(const QJsonDocument &document);
@@ -89,7 +101,9 @@ private:
     QVariantList m_libraryDocuments;
     QVariantList m_localSearchMatches;
     bool m_busy = false;
+    bool m_metadataBusy = false;
     bool m_timedOut = false;
+    bool m_authenticationRequired = false;
     QString m_error;
     QString m_status;
     QString m_selectedTitle;
@@ -103,10 +117,21 @@ private:
     QString m_location = "new";
     QString m_activeQuery;
     QString m_pendingId;
+    QString m_queuedHighlightId;
+    bool m_hasQueuedOpen = false;
+    QString m_queuedOpenId;
+    QString m_queuedOpenTitle;
+    QString m_queuedOpenAuthor;
+    QString m_queuedOpenUrl;
+    QStringList m_queuedOpenTags;
+    QString m_queuedOpenNote;
     QString m_pendingLocation;
     QString m_pendingNote;
     QStringList m_pendingTags;
     QString m_pendingHighlightId;
     QString m_pendingHighlightNote;
     QStringList m_pendingHighlightTags;
+    QHash<QString, QString> m_contentCache;
+    QHash<QString, QVariantList> m_highlightsCache;
+    QSet<QString> m_highlightsLoaded;
 };

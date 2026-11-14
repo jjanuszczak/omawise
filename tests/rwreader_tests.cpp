@@ -22,6 +22,7 @@ private slots:
     void listAndFeedUseExpectedCliArguments();
     void searchMergesLocalAndRemoteResults();
     void moveDocumentUsesSupportedLocationCommand();
+    void authenticationErrorsAreDetectedAndClearedOnRetry();
     void documentNoteUsesBulkMetadataCommand();
     void documentNoteReportsPerItemFailure();
     void highlightMetadataUsesSupportedCliCommands();
@@ -50,6 +51,7 @@ void BackendTests::initTestCase() {
               "  *reader-bulk-edit-document-metadata*) if [ \"$RWREADER_NOTE_FAILURE\" = 1 ]; then printf '%s\\n' '{\"results\":[{\"id\":\"doc-42\",\"success\":false,\"error\":\"Document not found\"}]}' ; else printf '%s\\n' '{\"results\":[{\"id\":\"doc-42\",\"success\":true}]}' ; fi ;;\n"
               "  *--title-search*) printf '%s\\n' '{\"results\":[{\"id\":\"title-only\",\"title\":\"Title-only result\"}]}' ;;\n"
               "  *reader-search-documents*) printf '%s\\n' '{\"results\":[{\"id\":\"remote\",\"title\":\"Remote result\"}]}' ;;\n"
+              "  *reader-list-documents*) if [ \"$RWREADER_AUTH_FAILURE\" = 1 ]; then printf '%s\\n' '401 Unauthorized' >&2; exit 1; else printf '%s\\n' '{\"results\":[{\"id\":\"local\",\"title\":\"Local article\",\"author\":\"A. Writer\"}]}' ; fi ;;\n"
               "  *reader-get-document-details*) if [ \"$RWREADER_DETAIL_JSON_STRING\" = 1 ]; then printf '%s\\n' '\"# JSON article\\n\\nBody paragraph.\"' ; else printf '%s\\n' '# Article' '' 'First paragraph for selection.' '' 'Second paragraph for keyboard navigation.' ; fi ;;\n"
               "  *reader-set-highlight-notes*) printf '%s\\n' '{\"success\":true}' ;;\n"
               "  *reader-add-tags-to-highlight*) printf '%s\\n' '{\"success\":true}' ;;\n"
@@ -114,6 +116,20 @@ void BackendTests::moveDocumentUsesSupportedLocationCommand() {
     QFile log(m_logPath);
     QVERIFY(log.open(QIODevice::ReadOnly | QIODevice::Text));
     QVERIFY(log.readAll().contains("reader-move-documents --document-ids doc-42 --location later"));
+}
+
+void BackendTests::authenticationErrorsAreDetectedAndClearedOnRetry() {
+    qputenv("RWREADER_AUTH_FAILURE", "1");
+    Backend backend;
+    backend.refresh();
+    QTRY_VERIFY_WITH_TIMEOUT(!backend.busy(), 3000);
+    QVERIFY(backend.authenticationRequired());
+    QVERIFY(backend.error().contains("401 Unauthorized"));
+
+    qunsetenv("RWREADER_AUTH_FAILURE");
+    backend.refresh();
+    QVERIFY(!backend.authenticationRequired());
+    QTRY_VERIFY_WITH_TIMEOUT(!backend.busy(), 3000);
 }
 
 void BackendTests::documentNoteUsesBulkMetadataCommand() {
@@ -213,9 +229,12 @@ void BackendTests::qmlSearchActivationAndReaderSelection() {
     QObject *search = window->findChild<QObject *>(QStringLiteral("searchField"));
     QObject *list = window->findChild<QObject *>(QStringLiteral("documentList"));
     QObject *openButton = window->findChild<QObject *>(QStringLiteral("openSelectedDocumentButton"));
+    QObject *signInButton = window->findChild<QObject *>(QStringLiteral("authSignInButton"));
     QVERIFY(search);
     QVERIFY(list);
     QVERIFY(openButton);
+    QVERIFY(signInButton);
+    QVERIFY(!signInButton->property("visible").toBool());
     QTRY_VERIFY_WITH_TIMEOUT(!backend.busy(), 3000);
 
     QVERIFY(QMetaObject::invokeMethod(search, "forceActiveFocus"));
@@ -301,6 +320,16 @@ void BackendTests::qmlSearchActivationAndReaderSelection() {
     QVERIFY(openButton->property("enabled").toBool());
     QVERIFY(QMetaObject::invokeMethod(openButton, "clicked"));
     QTRY_VERIFY_WITH_TIMEOUT(engine.rootObjects().first()->property("reading").toBool(), 1000);
+    QTRY_VERIFY_WITH_TIMEOUT(!backend.busy(), 3000);
+
+    engine.rootObjects().first()->setProperty("reading", false);
+    qputenv("RWREADER_AUTH_FAILURE", "1");
+    backend.refresh();
+    QTRY_VERIFY_WITH_TIMEOUT(!backend.busy(), 3000);
+    QVERIFY(backend.authenticationRequired());
+    QVERIFY(signInButton->property("visible").toBool());
+    qunsetenv("RWREADER_AUTH_FAILURE");
+    QVERIFY(clickObject(signInButton));
     QTRY_VERIFY_WITH_TIMEOUT(!backend.busy(), 3000);
 
     QFile log(m_logPath);

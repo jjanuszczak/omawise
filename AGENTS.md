@@ -9,12 +9,12 @@
 - Build: `./bin/build`
 - Run from this checkout: `./bin/run` (rebuilds before launch)
 - Install/package: `./bin/install` invokes the local development PKGBUILD. Review the packaging paths before changing or invoking it.
-- The app expects `readwise` on `PATH`. CLI login is user-managed with `readwise login`; the app invokes login only when its Connect button is selected.
+- The app expects `readwise` on `PATH`. CLI login is user-managed with `readwise login`; the app offers that flow only after a CLI authentication error.
 
 ## Architecture
 
 - `src/backend.{h,cpp}` owns app state and calls the CLI asynchronously with `QProcess`. Keep invocations on a fixed allowlist, pass argument arrays (never a shell string), and do not pass credentials in arguments. Document location actions use `reader-move-documents` with only Inbox (`new`), Later, or Archive destinations.
-- `src/Main.qml` owns layout and interaction. The selected document's compact metadata pane stays visible beside the list or article; it has Info and Notebook tabs, with document notes/highlights in Notebook and hover-revealed highlight edit controls. Selecting a list row loads its details/highlights without opening the article. Keep library/document navigation keyboard-accessible, preserve focus behavior, and update the shortcut overlay and README when bindings change.
+- `src/Main.qml` owns layout and interaction. The selected document's compact metadata pane stays visible beside the list or article; it has Info and Notebook tabs, with document notes/highlights in Notebook and hover-revealed highlight edit controls. List selection uses fields already present in the list response; highlights load lazily in Notebook and are cached for the app session. Metadata loading must not disable list navigation or cover the list with a blocking overlay. Keep library/document navigation keyboard-accessible, preserve focus behavior, and update the shortcut overlay and README when bindings change.
 - `src/theme.{h,cpp}` follows Omarchy's accent color and reads Hyprland rounding; the UI uses Omarchy's `monospace` fontconfig alias and square Material controls, with only subtle rounding on small surfaces.
 - `prototype/reader-ux/` is the disconnected mock-data prototype from Phase 0; the active application is at the project root.
 - `docs/readwise-reader-omarchy-prd.md` is the product plan. `docs/phase-0-discovery.md` records API/CLI findings and known capability limits.

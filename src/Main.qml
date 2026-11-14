@@ -56,17 +56,16 @@ ApplicationWindow {
         const doc = selectedDocument()
         if (!doc.id || reading || doc.id === lastInspectedDocumentId)
             return
-        if (backend.busy)
-            return
         lastInspectedDocumentId = doc.id
-        if (doc.id)
-            backend.openDocument(doc.id, doc.title || "", doc.author || "", doc.url || "", documentTags(doc), doc.notes || "")
+        backend.selectDocument(doc.id, doc.title || "", doc.author || "", doc.url || "", documentTags(doc), doc.notes || "")
+        if (metadataTabs.currentIndex === 1)
+            notebookLoadTimer.restart()
     }
 
     function scheduleSelectedDocumentInspection() {
         pendingInspection = true
         Qt.callLater(function() {
-            if (!pendingInspection || backend.busy)
+            if (!pendingInspection)
                 return
             pendingInspection = false
             inspectSelectedDocument()
@@ -255,8 +254,8 @@ ApplicationWindow {
     }
 
     Shortcut { sequence: "Ctrl+K"; context: Qt.ApplicationShortcut; onActivated: showPalette = true }
-    Shortcut { sequence: "Return"; context: Qt.ApplicationShortcut; enabled: !reading && listItemSelected && !!selectedDocument().id && !backend.busy && !showHelp && !showPalette && !searchField.activeFocus && !newDocumentTagEditor.activeFocus && !documentNoteEditor.activeFocus; onActivated: openSelected() }
-    Shortcut { sequence: "Enter"; context: Qt.ApplicationShortcut; enabled: !reading && listItemSelected && !!selectedDocument().id && !backend.busy && !showHelp && !showPalette && !searchField.activeFocus && !newDocumentTagEditor.activeFocus && !documentNoteEditor.activeFocus; onActivated: openSelected() }
+    Shortcut { sequence: "Return"; context: Qt.ApplicationShortcut; enabled: !reading && listItemSelected && !!selectedDocument().id && (!backend.busy || backend.metadataBusy) && !showHelp && !showPalette && !searchField.activeFocus && !newDocumentTagEditor.activeFocus && !documentNoteEditor.activeFocus; onActivated: openSelected() }
+    Shortcut { sequence: "Enter"; context: Qt.ApplicationShortcut; enabled: !reading && listItemSelected && !!selectedDocument().id && (!backend.busy || backend.metadataBusy) && !showHelp && !showPalette && !searchField.activeFocus && !newDocumentTagEditor.activeFocus && !documentNoteEditor.activeFocus; onActivated: openSelected() }
     Shortcut { sequence: "/"; context: Qt.ApplicationShortcut; enabled: !reading && !searchField.activeFocus && !showPalette; onActivated: searchField.forceActiveFocus() }
     Shortcut { sequence: "?"; context: Qt.ApplicationShortcut; enabled: !searchField.activeFocus && !showPalette; onActivated: showHelp = !showHelp }
     Shortcut { sequence: "Escape"; context: Qt.ApplicationShortcut; enabled: !searchField.activeFocus; onActivated: { if (showPalette) showPalette = false; else if (showHelp) showHelp = false; else if (reading) returnToLibrary() } }
@@ -276,8 +275,11 @@ ApplicationWindow {
     }
     onSelectedIndexChanged: {
         documentList.currentIndex = selectedIndex
-        if (!reading)
+        if (!reading) {
             scheduleSelectedDocumentInspection()
+            if (metadataTabs.currentIndex === 1)
+                notebookLoadTimer.restart()
+        }
     }
 
     Connections {
@@ -318,6 +320,13 @@ ApplicationWindow {
         function onSelectedDocumentChanged() {
             documentNoteEditor.text = backend.selectedNote
         }
+    }
+
+    Timer {
+        id: notebookLoadTimer
+        interval: 140
+        repeat: false
+        onTriggered: if (metadataTabs.currentIndex === 1 && selectedDocument().id) backend.loadHighlights()
     }
 
     ColumnLayout {
@@ -484,7 +493,22 @@ ApplicationWindow {
                 Item { Layout.fillHeight: true }
                 Rectangle { Layout.fillWidth: true; height: 1; color: "#34373c" }
                 Text { text: reading ? qsTr("↑/↓ paragraph · H highlight · select with Shift+Arrow") : qsTr("j/k move · Enter open · Tab changes pane · ? shortcuts"); color: "#93978f"; font.family: theme.uiFont; font.pixelSize: 9; wrapMode: Text.Wrap; Layout.fillWidth: true }
-                Button { Material.roundedScale: Material.NotRounded; font.family: theme.uiFont; text: qsTr("Connect / sign in"); visible: !reading; Layout.fillWidth: true; onClicked: backend.login() }
+                Rectangle {
+                    visible: backend.authenticationRequired
+                    Layout.fillWidth: true
+                    implicitHeight: authPrompt.implicitHeight + 18
+                    color: "#272a2f"
+                    border.color: "#514a35"
+                    radius: Math.min(2, theme.radius)
+                    ColumnLayout {
+                        id: authPrompt
+                        anchors.fill: parent
+                        anchors.margins: 9
+                        spacing: 7
+                        Text { text: qsTr("Readwise sign-in required"); color: "#e4dfce"; font.family: theme.uiFont; font.pixelSize: 10; wrapMode: Text.Wrap; Layout.fillWidth: true }
+                        Button { Material.roundedScale: Material.NotRounded; font.family: theme.uiFont; text: qsTr("Sign in"); objectName: "authSignInButton"; Layout.fillWidth: true; enabled: !backend.busy; onClicked: backend.login() }
+                    }
+                }
             }
         }
 
@@ -507,7 +531,7 @@ ApplicationWindow {
                     objectName: "openSelectedDocumentButton"
                     implicitWidth: 34; implicitHeight: 34; padding: 0
                     text: "↗"; font.family: theme.uiFont; font.pixelSize: 17
-                    enabled: !!selectedDocument().id && !backend.busy
+                    enabled: !!selectedDocument().id && (!backend.busy || backend.metadataBusy)
                     onClicked: openSelected()
                     background: Rectangle { color: parent.hovered ? "#343940" : "transparent"; radius: 0 }
                     ToolTip.visible: hovered
@@ -532,7 +556,7 @@ ApplicationWindow {
                     anchors.fill: parent
                     clip: true
                     model: backend.documents
-                    enabled: !backend.busy
+                    enabled: !backend.busy || backend.metadataBusy
                     focus: true
                     activeFocusOnTab: true
                     currentIndex: 0
@@ -581,7 +605,7 @@ ApplicationWindow {
                         documentList.forceActiveFocus()
                     }
                     Keys.onPressed: function(event) {
-                        if (!backend.busy && (event.key === Qt.Key_Return || event.key === Qt.Key_Enter)) {
+                        if ((!backend.busy || backend.metadataBusy) && (event.key === Qt.Key_Return || event.key === Qt.Key_Enter)) {
                             openSelected()
                             event.accepted = true
                         }
@@ -594,7 +618,7 @@ ApplicationWindow {
                         }
                     }
                     Keys.onPressed: function(event) {
-                        if (backend.busy) return
+                        if (backend.busy && !backend.metadataBusy) return
                         if (event.key === Qt.Key_J || event.key === Qt.Key_Down) {
                             incrementCurrentIndex(); event.accepted = true
                         } else if (event.key === Qt.Key_K || event.key === Qt.Key_Up) {
@@ -608,14 +632,14 @@ ApplicationWindow {
                 }
                 Rectangle {
                     anchors.fill: parent
-                    visible: backend.busy
+                    visible: backend.busy && !backend.metadataBusy
                     color: "#d917191d"
                     z: 2
                     BusyIndicator {
                         anchors.centerIn: parent
                         width: 76
                         height: 76
-                        running: backend.busy
+                        running: backend.busy && !backend.metadataBusy
                         palette.highlight: theme.accent
                     }
                 }
@@ -718,7 +742,7 @@ ApplicationWindow {
                         TextArea { Material.roundedScale: Material.NotRounded;
                             id: articleText
                             objectName: "articleText"
-                            text: backend.busy ? qsTr("Loading document…") : backend.formattedMarkdown(backend.selectedContent, theme.accent)
+                    text: backend.busy && backend.selectedContent.length === 0 ? qsTr("Loading document…") : backend.formattedMarkdown(backend.selectedContent, theme.accent)
                             textFormat: TextEdit.RichText
                             width: Math.min(articleScroll.width, 760)
                             x: Math.max(0, (articleScroll.width - width) / 2)
@@ -760,14 +784,14 @@ ApplicationWindow {
                     }
                     Rectangle {
                         anchors.fill: parent
-                        visible: backend.busy
+                        visible: backend.busy && !backend.metadataBusy
                         color: "#d917191d"
                         z: 2
                         BusyIndicator {
                             anchors.centerIn: parent
                             width: 76
                             height: 76
-                            running: backend.busy
+                        running: backend.busy && !backend.metadataBusy
                             palette.highlight: theme.accent
                         }
                     }
@@ -796,13 +820,24 @@ ApplicationWindow {
                     Layout.maximumWidth: 360
                     Layout.fillHeight: true
                     spacing: 0
+                RowLayout {
+                    Layout.fillWidth: true
                     TabBar {
                         id: metadataTabs
                         objectName: "metadataTabs"
                         Layout.fillWidth: true
                         background: Rectangle { color: "#1d2025" }
+                        onCurrentIndexChanged: if (currentIndex === 1) notebookLoadTimer.restart()
                         TabButton { text: qsTr("Info"); font.family: theme.uiFont; objectName: "metadataInfoTab" }
                         TabButton { text: backend.selectedHighlights.length > 0 ? qsTr("Notebook · %1").arg(backend.selectedHighlights.length) : qsTr("Notebook"); font.family: theme.uiFont; objectName: "metadataNotebookTab" }
+                    }
+                    BusyIndicator {
+                        width: 20; height: 20
+                        visible: backend.metadataBusy
+                        running: backend.metadataBusy
+                        palette.highlight: theme.accent
+                        Layout.rightMargin: 8
+                    }
                     }
                     ScrollView {
                         id: metadataScroll
@@ -1092,8 +1127,8 @@ ApplicationWindow {
                 BusyIndicator {
                     width: 18
                     height: 18
-                    visible: backend.busy
-                    running: backend.busy
+                    visible: backend.busy && !backend.metadataBusy
+                    running: backend.busy && !backend.metadataBusy
                     palette.highlight: theme.accent
                 }
                 Rectangle {
