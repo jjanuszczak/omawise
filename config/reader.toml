@@ -1,0 +1,9 @@
+# Copy to ~/.config/omawise/reader.toml to customize article typography.
+# Omawise reloads this file while running. Values outside supported ranges are clamped.
+
+[reader]
+font_family = "monospace"
+font_size_px = 12
+line_spacing = 1.2
+paragraph_spacing_pt = 18
+content_width = 760

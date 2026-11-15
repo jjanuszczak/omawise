@@ -33,6 +33,7 @@ class Backend : public QObject {
     Q_PROPERTY(QString selectedUrl READ selectedUrl NOTIFY selectedDocumentChanged)
     Q_PROPERTY(QString selectedNote READ selectedNote NOTIFY selectedDocumentChanged)
     Q_PROPERTY(QStringList selectedTags READ selectedTags NOTIFY selectedDocumentChanged)
+    Q_PROPERTY(QStringList availableDocumentTags READ availableDocumentTags NOTIFY availableDocumentTagsChanged)
     Q_PROPERTY(QVariantList selectedHighlights READ selectedHighlights NOTIFY selectedHighlightsChanged)
     Q_PROPERTY(QVariantList selectedHeadings READ selectedHeadings NOTIFY selectedDocumentChanged)
     Q_PROPERTY(QVariantList selectedParagraphs READ selectedParagraphs NOTIFY selectedDocumentChanged)
@@ -59,6 +60,7 @@ public:
     QString selectedUrl() const { return m_selectedUrl; }
     QString selectedNote() const { return m_selectedNote; }
     QStringList selectedTags() const { return m_selectedTags; }
+    QStringList availableDocumentTags() const { return m_availableDocumentTags; }
     QVariantList selectedHighlights() const { return m_selectedHighlights; }
     QVariantList selectedHeadings() const;
     QVariantList selectedParagraphs() const;
@@ -78,6 +80,7 @@ public:
     Q_INVOKABLE void moveDocument(const QString &id, const QString &location);
     Q_INVOKABLE void saveDocumentNote(const QString &id, const QString &note);
     Q_INVOKABLE void saveDocumentTags(const QString &id, const QStringList &tags);
+    Q_INVOKABLE void loadDocumentTags();
     Q_INVOKABLE void createHighlight(const QString &documentId, const QString &text);
     Q_INVOKABLE void saveHighlightNote(const QString &documentId, const QString &highlightId, const QString &note);
     Q_INVOKABLE void addHighlightTags(const QString &documentId, const QString &highlightId, const QStringList &tags);
@@ -87,7 +90,9 @@ public:
     Q_INVOKABLE void clearError();
     Q_INVOKABLE void clearArticleCache();
     Q_INVOKABLE bool openExternalUrl(const QString &url);
-    Q_INVOKABLE QString formattedMarkdown(const QString &markdown, const QString &accent) const;
+    Q_INVOKABLE QString formattedMarkdown(const QString &markdown, const QString &accent,
+                                          const QVariantMap &readerStyle = {}) const;
+    Q_INVOKABLE bool copyArticleMarkdown(const QString &content, const QVariantMap &metadata);
 
 signals:
     void documentsChanged();
@@ -102,6 +107,7 @@ signals:
     void statusChanged();
     void selectedDocumentChanged();
     void selectedHighlightsChanged();
+    void availableDocumentTagsChanged();
     void locationChanged();
 
 private:
@@ -139,6 +145,7 @@ private:
     static QJsonObject unwrapObject(const QJsonDocument &document);
 
     QProcess m_process;
+    QProcess m_documentTagsProcess;
     QNetworkAccessManager m_network;
     QNetworkReply *m_apiReply = nullptr;
     QTimer m_timeout;
@@ -166,6 +173,7 @@ private:
     QString m_selectedNote;
     QString m_selectedId;
     QStringList m_selectedTags;
+    QStringList m_availableDocumentTags;
     QVariantList m_selectedHighlights;
     QString m_location = "new";
     QString m_activeQuery;
@@ -173,6 +181,8 @@ private:
     QString m_pendingId;
     QString m_queuedHighlightId;
     bool m_hasQueuedOpen = false;
+    bool m_documentTagsLoaded = false;
+    bool m_documentTagsInProgress = false;
     QString m_queuedOpenId;
     QString m_queuedOpenTitle;
     QString m_queuedOpenAuthor;

@@ -8,12 +8,15 @@
 #include <QCryptographicHash>
 #include <QElapsedTimer>
 #include <QDateTime>
+#include <QTextDocument>
+#include <QTextBlock>
 #include <QJsonDocument>
 #include <QCoreApplication>
 #include <QProcessEnvironment>
 #include <QSignalSpy>
 #include <QTemporaryDir>
 #include <QGuiApplication>
+#include <QClipboard>
 #include <QQuickWindow>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
@@ -38,6 +41,9 @@ private slots:
     void documentNoteReportsPerItemFailure();
     void highlightMetadataUsesSupportedCliCommands();
     void markdownIsFormattedAsRichText();
+    void markdownKeepsParagraphSpacingInRichText();
+    void copyArticleMarkdownAddsYamlFrontmatter();
+    void readerStyleUsesDefaultsAndReloadsBoundedToml();
     void detailAcceptsMarkdownJsonString();
     void persistentArticleCacheLoadsImmediatelyAndClears();
     void persistentLibraryCacheLoadsBeforeRefresh();
@@ -54,6 +60,7 @@ private:
 
 void BackendTests::initTestCase() {
     qputenv("XDG_DATA_HOME", m_tempDir.filePath("xdg-data").toLocal8Bit());
+    qputenv("XDG_CONFIG_HOME", m_tempDir.filePath("xdg-config").toLocal8Bit());
     QDir(QStandardPaths::writableLocation(QStandardPaths::AppDataLocation)
          + QStringLiteral("/article-cache")).removeRecursively();
     QVERIFY(m_tempDir.isValid());
@@ -71,12 +78,13 @@ void BackendTests::initTestCase() {
               "  *reader-search-documents*) printf '%s\\n' '{\"results\":[{\"id\":\"remote\",\"title\":\"Remote result\"}]}' ;;\n"
               "  *--page-cursor*) if [ \"$OMAWISE_PAGINATION_TEST\" = 1 ]; then printf '%s\\n' '{\"results\":[{\"id\":\"second\",\"title\":\"Second page\"},{\"id\":\"local\",\"title\":\"Duplicate row\"}],\"nextPageCursor\":null}' ; else printf '%s\\n' '{\"results\":[]}' ; fi ;;\n"
               "  *reader-list-documents*) if [ \"$OMAWISE_AUTH_FAILURE\" = 1 ]; then printf '%s\\n' '401 Unauthorized' >&2; exit 1; elif [ \"$OMAWISE_PAGINATION_TEST\" = 1 ]; then printf '%s\\n' '{\"results\":[{\"id\":\"local\",\"title\":\"Local article\",\"author\":\"A. Writer\"}],\"nextPageCursor\":\"cursor-1\"}' ; else printf '%s\\n' '{\"results\":[{\"id\":\"local\",\"title\":\"Local article\",\"author\":\"A. Writer\"}]}' ; fi ;;\n"
-              "  *reader-get-document-details*) if [ \"$OMAWISE_DETAIL_FAIL\" = 1 ]; then printf '%s\\n' 'temporary detail failure' >&2; exit 1; elif [ \"$OMAWISE_DETAIL_DELAY\" = 1 ]; then sleep 1; fi; if [ \"$OMAWISE_DETAIL_JSON_STRING\" = 1 ]; then printf '%s\\n' '\"# JSON article\\n\\nBody paragraph.\"' ; else printf '%s\\n' '# Article' '' 'First paragraph for selection.' '' 'Second paragraph for keyboard navigation.' ; fi ;;\n"
+              "  *reader-get-document-details*) if [ \"$OMAWISE_DETAIL_FAIL\" = 1 ]; then printf '%s\\n' 'temporary detail failure' >&2; exit 1; elif [ \"$OMAWISE_DETAIL_DELAY\" = 1 ]; then sleep 1; fi; if [ \"$OMAWISE_DETAIL_JSON_STRING\" = 1 ]; then printf '%s\\n' '\"# JSON article\\n\\nBody paragraph.\"' ; elif [ \"$OMAWISE_FORMATTING_FIXTURE\" = 1 ]; then printf '%s\\n' '# Article' '' '## Section heading' '' 'First paragraph for selection with several lines of text to check readable measure and line spacing.' '' 'Second paragraph for keyboard navigation.' '' '> A useful blockquote for the article preview.' '' '- First list item' '- Second list item' '' '`inline code` and [a sample link](https://example.com).' '' '```cpp' 'int answer = 42;' '```' ; else printf '%s\\n' '# Article' '' 'First paragraph for selection.' '' 'Second paragraph for keyboard navigation.' ; fi ;;\n"
               "  *reader-set-highlight-notes*) printf '%s\\n' '{\"success\":true}' ;;\n"
               "  *reader-add-tags-to-highlight*) printf '%s\\n' '{\"success\":true}' ;;\n"
               "  *reader-remove-tags-from-highlight*) printf '%s\\n' '{\"success\":true}' ;;\n"
               "  *reader-move-documents*) printf '%s\\n' '{\"success\":true}' ;;\n"
               "  *reader-get-document-highlights*) printf '%s\\n' '{\"results\":[{\"id\":\"highlight-1\",\"text\":\"Saved passage\",\"notes\":\"Existing highlight note\",\"tags\":[\"research\"]}]}' ;;\n"
+              "  *reader-list-tags*) printf '%s\\n' '{\"results\":[{\"key\":\"shared\",\"name\":\"shared\"},{\"key\":\"technology\",\"name\":\"technology\"}]}' ;;\n"
               "  *reader-create-highlight*) printf '%s\\n' '{\"success\":true}' ;;\n"
               "  *) printf '%s\\n' '{\"results\":[{\"id\":\"local\",\"title\":\"Local article\",\"author\":\"A. Writer\"}]}' ;;\n"
               "esac\n");
@@ -236,6 +244,94 @@ void BackendTests::markdownIsFormattedAsRichText() {
     QVERIFY(html.contains("Heading"));
     QVERIFY(html.contains("href=\"https://example.com\""));
     QVERIFY(html.contains("#12ab34", Qt::CaseInsensitive));
+}
+
+void BackendTests::markdownKeepsParagraphSpacingInRichText() {
+    Backend backend;
+    const QVariantMap style{{"fontSizePx", 12}, {"lineSpacing", 1.2}, {"paragraphSpacingPt", 18}};
+    const QString html = backend.formattedMarkdown("First paragraph.\n\nSecond paragraph.", "#12ab34", style);
+    QTextDocument rendered;
+    rendered.setHtml(html);
+    const QTextBlock paragraph = rendered.begin();
+    QVERIFY(paragraph.isValid());
+    QCOMPARE(paragraph.text(), QStringLiteral("First paragraph."));
+    QVERIFY(paragraph.blockFormat().bottomMargin() >= 24.0);
+}
+
+void BackendTests::copyArticleMarkdownAddsYamlFrontmatter() {
+    Backend backend;
+    const QVariantMap metadata{
+        {"id", "doc-42"},
+        {"title", "A \"quoted\" title"},
+        {"author", "A. Writer"},
+        {"url", "https://example.com/article"},
+        {"site_name", "example.com"},
+        {"category", "article"},
+        {"location", "new"},
+        {"published_date", "2026-11-15"},
+        {"tags", QStringList({"research", "long tag"})}
+    };
+    QVERIFY(backend.copyArticleMarkdown("# Article\n\nBody paragraph.", metadata));
+    QString copied = QGuiApplication::clipboard()->text();
+    QVERIFY(copied.startsWith("---\nid: \"doc-42\"\ntitle: \"A \\\"quoted\\\" title\"\n"));
+    QVERIFY(copied.contains("author: \"A. Writer\""));
+    QVERIFY(copied.contains("url: \"https://example.com/article\""));
+    QVERIFY(copied.contains("source: \"example.com\""));
+    QVERIFY(copied.contains("published_date: \"2026-11-15\""));
+    QVERIFY(copied.contains("tags:\n  - \"research\"\n  - \"long tag\""));
+    QVERIFY(copied.endsWith("# Article\n\nBody paragraph.\n"));
+
+    QVERIFY(backend.copyArticleMarkdown("<h1>HTML title</h1><p>HTML body.</p>", metadata));
+    copied = QGuiApplication::clipboard()->text();
+    QVERIFY(copied.contains("# HTML title"));
+    QVERIFY(copied.contains("HTML body."));
+}
+
+void BackendTests::readerStyleUsesDefaultsAndReloadsBoundedToml() {
+    QVERIFY(QDir().mkpath(QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation)));
+    const QString configDirectory = QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation)
+                                   + QStringLiteral("/omawise");
+    QDir(configDirectory).removeRecursively();
+    Theme theme;
+    QCOMPARE(theme.readerStyle().value("fontFamily").toString(), QStringLiteral("monospace"));
+    QCOMPARE(theme.readerStyle().value("fontSizePx").toInt(), 12);
+    QCOMPARE(theme.readerStyle().value("lineSpacing").toDouble(), 1.2);
+    QCOMPARE(theme.readerStyle().value("paragraphSpacingPt").toInt(), 18);
+    QCOMPARE(theme.readerStyle().value("contentWidth").toInt(), 760);
+
+    QVERIFY(QDir().mkpath(configDirectory));
+    QFile settings(configDirectory + QStringLiteral("/reader.toml"));
+    QVariantMap editedStyle = theme.readerStyle();
+    editedStyle["fontFamily"] = QStringLiteral("Atkinson Hyperlegible");
+    editedStyle["fontSizePx"] = 16;
+    editedStyle["lineSpacing"] = 1.6;
+    editedStyle["paragraphSpacingPt"] = 24;
+    editedStyle["contentWidth"] = 920;
+    QVERIFY(theme.saveReaderStyle(editedStyle));
+    QTRY_COMPARE_WITH_TIMEOUT(theme.readerStyle().value("fontSizePx").toInt(), 16, 1500);
+    QVERIFY(settings.open(QIODevice::ReadOnly | QIODevice::Text));
+    const QByteArray savedSettings = settings.readAll();
+    settings.close();
+    QVERIFY(savedSettings.contains("font_family = \"Atkinson Hyperlegible\""));
+    QVERIFY(savedSettings.contains("font_size_px = 16"));
+    QVERIFY(savedSettings.contains("line_spacing = 1.6"));
+    QVERIFY(savedSettings.contains("paragraph_spacing_pt = 24"));
+    QVERIFY(savedSettings.contains("content_width = 920"));
+
+    QVERIFY(settings.open(QIODevice::WriteOnly | QIODevice::Text | QIODevice::Truncate));
+    settings.write("[reader]\nfont_family = \"Atkinson Hyperlegible\"\nfont_size_px = 200\nline_spacing = 1.7\ncontent_width = 1300\n");
+    settings.close();
+    QTRY_COMPARE_WITH_TIMEOUT(theme.readerStyle().value("fontSizePx").toInt(), 48, 1500);
+    QCOMPARE(theme.readerStyle().value("fontFamily").toString(), QStringLiteral("Atkinson Hyperlegible"));
+    QCOMPARE(theme.readerStyle().value("lineSpacing").toDouble(), 1.7);
+    QCOMPARE(theme.readerStyle().value("contentWidth").toInt(), 1200);
+
+    QVERIFY(settings.open(QIODevice::WriteOnly | QIODevice::Text | QIODevice::Truncate));
+    settings.write("[reader]\nfont_size_px = invalid\nline_spacing = 0\n");
+    settings.close();
+    QTRY_COMPARE_WITH_TIMEOUT(theme.readerStyle().value("fontSizePx").toInt(), 12, 1500);
+    QCOMPARE(theme.readerStyle().value("lineSpacing").toDouble(), 1.0);
+    QDir(configDirectory).removeRecursively();
 }
 
 void BackendTests::detailAcceptsMarkdownJsonString() {
@@ -471,6 +567,7 @@ void BackendTests::qmlSearchActivationAndReaderSelection() {
     QVERIFY(window->findChild<QObject *>(QStringLiteral("documentMetadataPane")));
 
     QVERIFY(QMetaObject::invokeMethod(list, "forceActiveFocus"));
+    qputenv("OMAWISE_FORMATTING_FIXTURE", "1");
     QTest::keyClick(window, Qt::Key_Return);
     QTRY_VERIFY_WITH_TIMEOUT(!backend.busy(), 3000);
     QTRY_COMPARE_WITH_TIMEOUT(backend.selectedHighlights().size(), 1, 3000);
@@ -478,8 +575,44 @@ void BackendTests::qmlSearchActivationAndReaderSelection() {
     QCOMPARE(engine.rootObjects().first()->property("reading").toBool(), true);
     QObject *article = window->findChild<QObject *>(QStringLiteral("articleText"));
     QVERIFY(article);
+    QVERIFY(window->grabWindow().save(QStringLiteral("/tmp/omawise-article-toolbar.png")));
+    QObject *inboxButton = window->findChild<QObject *>(QStringLiteral("inboxLocationButton"));
+    QObject *laterButton = window->findChild<QObject *>(QStringLiteral("laterLocationButton"));
+    QObject *archiveButton = window->findChild<QObject *>(QStringLiteral("archiveLocationButton"));
+    QObject *appearanceButton = window->findChild<QObject *>(QStringLiteral("readerAppearanceButton"));
+    QVERIFY(inboxButton);
+    QVERIFY(laterButton);
+    QVERIFY(archiveButton);
+    QVERIFY(appearanceButton);
+    QVERIFY(QMetaObject::invokeMethod(appearanceButton, "clicked"));
+    QObject *appearanceDialog = window->findChild<QObject *>(QStringLiteral("readerAppearanceDialog"));
+    QVERIFY(appearanceDialog);
+    QVERIFY(appearanceDialog->property("visible").toBool());
+    QVERIFY(window->findChild<QObject *>(QStringLiteral("readerFontFamilyPicker")));
+    QVERIFY(window->findChild<QObject *>(QStringLiteral("readerFontSizePicker")));
+    QVERIFY(window->findChild<QObject *>(QStringLiteral("readerLineSpacingPicker")));
+    QVERIFY(window->findChild<QObject *>(QStringLiteral("readerParagraphSpacingPicker")));
+    QVERIFY(window->findChild<QObject *>(QStringLiteral("readerContentWidthPicker")));
+    QObject *appearanceClose = window->findChild<QObject *>(QStringLiteral("readerAppearanceCloseButton"));
+    QVERIFY(appearanceClose);
+    QVERIFY(clickObject(appearanceClose));
+    QTRY_VERIFY_WITH_TIMEOUT(!appearanceDialog->property("visible").toBool(), 1000);
+    QVERIFY(!inboxButton->property("enabled").toBool());
+    QVERIFY(laterButton->property("enabled").toBool());
+    QVERIFY(QMetaObject::invokeMethod(laterButton, "clicked"));
+    QTRY_VERIFY_WITH_TIMEOUT(!backend.busy(), 3000);
+    QCOMPARE(backend.documents().first().toMap().value("location").toString(), QStringLiteral("later"));
+    QVERIFY(!laterButton->property("enabled").toBool());
+    QVERIFY(QMetaObject::invokeMethod(archiveButton, "clicked"));
+    QTRY_VERIFY_WITH_TIMEOUT(!backend.busy(), 3000);
+    QCOMPARE(backend.documents().first().toMap().value("location").toString(), QStringLiteral("archive"));
+    QVERIFY(QMetaObject::invokeMethod(inboxButton, "clicked"));
+    QTRY_VERIFY_WITH_TIMEOUT(!backend.busy(), 3000);
+    QCOMPARE(backend.documents().first().toMap().value("location").toString(), QStringLiteral("new"));
     QVERIFY(QMetaObject::invokeMethod(article, "forceActiveFocus"));
+    qunsetenv("OMAWISE_FORMATTING_FIXTURE");
     QTRY_VERIFY_WITH_TIMEOUT(article->property("activeFocus").toBool(), 1000);
+    QTest::keyClick(window, Qt::Key_Down);
     QTest::keyClick(window, Qt::Key_Down);
     QTest::keyClick(window, Qt::Key_Down);
     QTRY_VERIFY_WITH_TIMEOUT(article->property("selectedText").toString().contains(QStringLiteral("First paragraph")), 1000);
@@ -492,14 +625,29 @@ void BackendTests::qmlSearchActivationAndReaderSelection() {
     QTRY_VERIFY_WITH_TIMEOUT(!backend.busy(), 3000);
 
     // Mouse activation verifies the cached-selection path, which must survive
-    // the toolbar button taking focus before the click handler runs.
+    // the toolbar menu taking focus before the menu action runs.
     QVERIFY(QMetaObject::invokeMethod(article, "select", Q_ARG(int, 0), Q_ARG(int, 12)));
+    QObject *moreButtonObject = window->findChild<QObject *>(QStringLiteral("articleMoreButton"));
+    auto *moreButton = qobject_cast<QQuickItem *>(moreButtonObject);
+    QVERIFY(moreButton);
+    QVERIFY(QMetaObject::invokeMethod(moreButton, "clicked"));
+    QObject *moreMenu = window->findChild<QObject *>(QStringLiteral("articleMoreMenu"));
+    QVERIFY(moreMenu);
+    QVERIFY(moreMenu->property("visible").toBool());
+    QVERIFY(moreMenu->property("y").toReal() >= moreButton->height());
+    QObject *copyMarkdownButton = window->findChild<QObject *>(QStringLiteral("copyArticleMarkdownButton"));
+    QVERIFY(copyMarkdownButton);
+    QVERIFY(copyMarkdownButton->property("enabled").toBool());
+    QVERIFY(QMetaObject::invokeMethod(copyMarkdownButton, "triggered"));
+    const QString copiedArticle = QGuiApplication::clipboard()->text();
+    QVERIFY(copiedArticle.startsWith("---\n"));
+    QVERIFY(copiedArticle.contains("title: \"Remote result\""));
+    QVERIFY(copiedArticle.contains("# Article"));
     QObject *highlightButtonObject = window->findChild<QObject *>(QStringLiteral("highlightSelectionButton"));
     auto *highlightButton = qobject_cast<QQuickItem *>(highlightButtonObject);
     QVERIFY(highlightButton);
-    const QPoint highlightPoint = highlightButton->mapToScene(
-        QPointF(highlightButton->width() / 2, highlightButton->height() / 2)).toPoint();
-    QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier, highlightPoint);
+    QVERIFY(highlightButton->property("enabled").toBool());
+    QVERIFY(QMetaObject::invokeMethod(highlightButton, "triggered"));
     QTRY_VERIFY_WITH_TIMEOUT(!backend.busy(), 3000);
 
     QObject *noteEditor = window->findChild<QObject *>(QStringLiteral("documentNoteEditor"));
@@ -523,18 +671,36 @@ void BackendTests::qmlSearchActivationAndReaderSelection() {
     QCOMPARE(backend.selectedNote(), QString("A note from the metadata pane"));
 
     QObject *tagEditor = window->findChild<QObject *>(QStringLiteral("newDocumentTagEditor"));
-    QObject *tagSave = window->findChild<QObject *>(QStringLiteral("addDocumentTagButton"));
     metadataTabs->setProperty("currentIndex", 0);
     QVERIFY(tagEditor);
-    QVERIFY(tagSave);
+    QObject *tagSuggestions = window->findChild<QObject *>(QStringLiteral("documentTagSuggestionsPopup"));
+    QVERIFY(tagSuggestions);
+    QVERIFY(QMetaObject::invokeMethod(tagEditor, "forceActiveFocus"));
+    QTRY_VERIFY_WITH_TIMEOUT(backend.availableDocumentTags().contains(QStringLiteral("shared")), 1500);
+    QObject *tagSuggestionList = window->findChild<QObject *>(QStringLiteral("documentTagSuggestionList"));
+    QVERIFY(tagSuggestionList);
+    tagEditor->setProperty("text", QStringLiteral("sha"));
+    QVERIFY(QMetaObject::invokeMethod(tagEditor, "textEdited"));
+    QTRY_VERIFY_WITH_TIMEOUT(tagSuggestions->property("visible").toBool(), 1000);
+    QVERIFY(tagSuggestionList->property("count").toInt() >= 1);
+    QVERIFY(QMetaObject::invokeMethod(tagEditor, "accepted"));
+    QTRY_VERIFY_WITH_TIMEOUT(!backend.busy(), 3000);
+    QCOMPARE(backend.selectedTags(), QStringList({"shared"}));
+    QVERIFY(QMetaObject::invokeMethod(tagEditor, "forceActiveFocus"));
     tagEditor->setProperty("text", QStringLiteral("alpha"));
-    QVERIFY(clickObject(tagSave));
+    QVERIFY(QMetaObject::invokeMethod(tagEditor, "textEdited"));
+    QTRY_VERIFY_WITH_TIMEOUT(tagSuggestions->property("visible").toBool(), 1000);
+    QVERIFY(tagSuggestions->property("height").toReal() > 0);
+    QTest::keyClick(window, Qt::Key_Return);
     QTRY_VERIFY_WITH_TIMEOUT(!backend.busy(), 3000);
-    QCOMPARE(backend.selectedTags(), QStringList({"alpha"}));
+    QCOMPARE(backend.selectedTags(), QStringList({"shared", "alpha"}));
+    QVERIFY(QMetaObject::invokeMethod(tagEditor, "forceActiveFocus"));
     tagEditor->setProperty("text", QStringLiteral("beta"));
-    QVERIFY(clickObject(tagSave));
+    QVERIFY(QMetaObject::invokeMethod(tagEditor, "textEdited"));
+    QTRY_VERIFY_WITH_TIMEOUT(tagSuggestions->property("visible").toBool(), 1000);
+    QTest::keyClick(window, Qt::Key_Return);
     QTRY_VERIFY_WITH_TIMEOUT(!backend.busy(), 3000);
-    QCOMPARE(backend.selectedTags(), QStringList({"alpha", "beta"}));
+    QCOMPARE(backend.selectedTags(), QStringList({"shared", "alpha", "beta"}));
 
     QObject *highlightRepeater = window->findChild<QObject *>(QStringLiteral("highlightRepeater"));
     QVERIFY(highlightRepeater);
@@ -542,6 +708,9 @@ void BackendTests::qmlSearchActivationAndReaderSelection() {
 
     engine.rootObjects().first()->setProperty("showHelp", true);
     QTRY_VERIFY(window->findChild<QObject *>(QStringLiteral("helpCloseButton")) != nullptr);
+    QObject *helpDialog = window->findChild<QObject *>(QStringLiteral("helpDialog"));
+    QVERIFY(helpDialog);
+    QTRY_VERIFY_WITH_TIMEOUT(helpDialog->property("visible").toBool(), 1000);
     QObject *helpCloseObject = window->findChild<QObject *>(QStringLiteral("helpCloseButton"));
     QVERIFY(clickObject(helpCloseObject));
     QTRY_VERIFY(!engine.rootObjects().first()->property("showHelp").toBool());
