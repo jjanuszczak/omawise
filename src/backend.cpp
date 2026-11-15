@@ -16,6 +16,7 @@
 #include <QColor>
 #include <QTextDocument>
 #include <QTextBlock>
+#include <QTextCursor>
 #include <QRegularExpression>
 #include <QFont>
 #include <QGuiApplication>
@@ -1085,12 +1086,20 @@ bool Backend::openExternalUrl(const QString &value) {
     return QDesktopServices::openUrl(url);
 }
 
-QString Backend::formattedMarkdown(const QString &markdown, const QString &accent) const {
+QString Backend::formattedMarkdown(const QString &markdown, const QString &accent,
+                                  const QVariantMap &readerStyle) const {
+    const QString fontFamily = readerStyle.value("fontFamily", "monospace").toString();
+    const int fontSizePx = qBound(12, readerStyle.value("fontSizePx", 12).toInt(), 48);
+    const double lineSpacing = qBound(1.0, readerStyle.value("lineSpacing", 1.2).toDouble(), 2.2);
+    const int paragraphSpacing = qBound(0, readerStyle.value("paragraphSpacingPt", 18).toInt(), 36);
     QTextDocument document;
     QFont documentFont("monospace");
-    documentFont.setPointSize(12);
+    documentFont.setPixelSize(fontSizePx);
+    documentFont.setFamily(fontFamily);
     if (qobject_cast<QGuiApplication *>(QCoreApplication::instance())) {
         documentFont = QGuiApplication::font();
+        documentFont.setFamily(fontFamily);
+        documentFont.setPixelSize(fontSizePx);
         if (documentFont.pixelSize() <= 0 && documentFont.pointSizeF() <= 0)
             documentFont.setPointSize(12);
     }
@@ -1098,8 +1107,8 @@ QString Backend::formattedMarkdown(const QString &markdown, const QString &accen
     const QColor accentColor(accent);
     const QString linkColor = accentColor.isValid() ? accentColor.name(QColor::HexRgb) : QStringLiteral("#FFD60A");
     document.setDefaultStyleSheet(QStringLiteral(R"CSS(
-        body { color: #d9dbd5; font-family: monospace; font-size: 13pt; margin: 0; padding: 0; }
-        p { margin-top: 0; margin-bottom: 15pt; }
+        body { color: #d9dbd5; font-family: "%2"; font-size: %3px; margin: 0; padding: 0; }
+        p { margin-top: 0; margin-bottom: %4pt; }
         h1 { color: #f2f3ee; font-size: 23pt; font-weight: 700; margin-top: 8pt; margin-bottom: 18pt; }
         h2 { color: #eef0e9; font-size: 18pt; font-weight: 650; margin-top: 25pt; margin-bottom: 11pt; }
         h3 { color: #e7e9e2; font-size: 14pt; font-weight: 650; margin-top: 20pt; margin-bottom: 9pt; }
@@ -1115,12 +1124,18 @@ QString Backend::formattedMarkdown(const QString &markdown, const QString &accen
         td, th { border: 1px solid #41464c; padding: 6pt 8pt; }
         hr { color: #41464c; }
         img { max-width: 100%; }
-    )CSS").arg(linkColor));
+    )CSS").arg(linkColor, fontFamily).arg(fontSizePx).arg(paragraphSpacing));
 
     if (isHtmlContent(markdown)) {
         document.setHtml(markdown);
     } else {
         document.setMarkdown(markdown);
+    }
+    for (QTextBlock block = document.begin(); block.isValid(); block = block.next()) {
+        QTextBlockFormat format = block.blockFormat();
+        format.setLineHeight(lineSpacing * 100.0, QTextBlockFormat::ProportionalHeight);
+        QTextCursor cursor(block);
+        cursor.setBlockFormat(format);
     }
     const QString html = document.toHtml();
     const QRegularExpression anchorExpression(QStringLiteral("<a\\s+href=\"([^\"]*)\">(.*?)</a>"),

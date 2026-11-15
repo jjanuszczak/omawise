@@ -799,9 +799,9 @@ ApplicationWindow {
                         TextEdit {
                             id: articleText
                             objectName: "articleText"
-                            text: backend.busy && backend.selectedContent.length === 0 ? qsTr("Loading document…") : backend.formattedMarkdown(backend.selectedContent, theme.accent)
+                            text: backend.busy && backend.selectedContent.length === 0 ? qsTr("Loading document…") : backend.formattedMarkdown(backend.selectedContent, theme.accent, theme.readerStyle)
                             textFormat: TextEdit.RichText
-                            width: Math.min(articleFlickable.width, 760)
+                            width: Math.min(articleFlickable.width, theme.readerStyle.contentWidth)
                             x: Math.max(0, (articleFlickable.width - width) / 2)
                             y: 24
                             height: Math.max(contentHeight, articleFlickable.height - 48)
@@ -820,7 +820,7 @@ ApplicationWindow {
                             color: "#dedfd9"
                             selectionColor: theme.accent
                             selectedTextColor: theme.accentForeground
-                            font.family: theme.uiFont; font.pixelSize: 17
+                            font.family: theme.readerStyle.fontFamily; font.pixelSize: theme.readerStyle.fontSizePx
                             Keys.onPressed: function(event) {
                                 if ((event.key === Qt.Key_Left || event.key === Qt.Key_Right)
                                     && (event.modifiers & Qt.ShiftModifier)) {

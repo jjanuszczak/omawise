@@ -26,6 +26,10 @@ On Arch/Omarchy, install the [latest Omawise release](https://github.com/jjanusz
 
 The app icon and sidebar use the vector mark in `assets/omawise-mark.svg`; dark and light horizontal wordmarks for promotional use are in `marketing/omawise-logo.svg` and `marketing/omawise-logo-light.svg`.
 
+## Reader typography
+
+Article typography follows Readwise Reader's adjustable type, size, line spacing, and content width model while keeping Omawise's current Omarchy dark colors and monospace font as defaults. Defaults use 12 px text, 1.2 line spacing, and 18 pt between paragraphs. To customize it, copy `config/reader.toml` to `~/.config/omawise/reader.toml`; the checkout command is `mkdir -p ~/.config/omawise && cp config/reader.toml ~/.config/omawise/reader.toml`. Omawise reloads the file while running. The supported options and bounds are documented in the example and in the packaged agent skill at `/usr/share/omawise/skills/omawise-reader-settings/SKILL.md`.
+
 ## Shortcuts
 
 | Key | Action |

@@ -6,6 +6,9 @@
 
 ## What exists
 
+- Article formatting is configurable through `~/.config/omawise/reader.toml`, with live reload and bounded fallback values. The initial controls are article typeface, text size, line spacing, paragraph spacing, and content width. Defaults are 12 px text, 1.2 line spacing, and 18 pt between paragraphs, retaining Omawise's current dark colors, Omarchy accent links, and monospace typeface. The 760 px reading column remains configurable.
+- The Arch package includes a TOML example and the `omawise-reader-settings` agent skill under `/usr/share/omawise/`.
+
 - Native C++/Qt Quick application target `omawise`, built with qmake (`omawise.pro`); the Arch package and desktop application are also named Omawise.
 - `src/backend.{h,cpp}` invokes the official Readwise CLI asynchronously using `QProcess` argument arrays; it does not shell out or pass CLI credentials.
 - Article bodies and first library pages are cached in memory and persistently under Qt's application data directory. Atomic JSON entries expire after 30 days for articles and 24 hours for library pages; the shared cap is 100 MiB, with 16 MiB per article and 2 MiB per library page. The command palette clears article bodies. Cached article text and list rows render while fresh API/CLI requests run; failed refreshes retain the last saved data. Credentials, document notes, and highlights are not persisted in these cache files.
@@ -64,8 +67,8 @@ Do not issue account calls during routine development; use a fake `readwise` exe
 
 ## Verification already performed
 
-- `./bin/build` passes with the available Qt 6.12 toolchain. The suite currently reports 17 Qt Test passes including setup and cleanup.
-- The repository's offscreen QML interaction test uses a fake CLI and verifies search submission, keyboard document activation, the Open action, article focus and paragraph/word selection, highlight creation through the shortcut and toolbar, inline document note/tag editing, API token dialog masking/clearing, and highlight refresh after creation. The full suite now reports 17 passes; new coverage includes persistent cache load/clear/expiry, cached library load, failed-refresh fallback, file permissions, title-search `document_id` normalization, highlight refresh before edits, and cache-backed QML frame timings.
+- The app compiles with the available Qt 6.12 toolchain. The full offscreen suite reports 18 Qt Test passes including setup and cleanup.
+- The repository's QML interaction test uses a fake CLI and verifies search submission, keyboard document activation, the Open action, article focus and paragraph/word selection, highlight creation through the shortcut and toolbar, inline document note/tag editing, API token dialog masking/clearing, and highlight refresh after creation. Coverage includes reader settings defaults, live TOML reload and value bounds; persistent cache load/clear/expiry; cached library load; failed-refresh fallback; file permissions; title-search `document_id` normalization; highlight refresh before edits; and cache-backed QML frame timings.
 - `bin/test` sets `QT_QPA_PLATFORM=offscreen` and `QT_QPA_PLATFORMTHEME=generic` so GUI checks do not depend on the host desktop session.
 - The CLI sign-in prompt is hidden normally and appears only when CLI error text indicates an authentication failure; it launches the official CLI OAuth flow when selected. The app does not inspect CLI credential files. The separate API token flow stores its token in Secret Service.
 - `./bin/package --cleanbuild` succeeds locally without deleting or modifying the project's `src/` files. Release `v0.1.3` repeated the clean package build successfully in GitHub Actions; the package has not yet been installed locally.

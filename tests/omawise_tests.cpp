@@ -38,6 +38,7 @@ private slots:
     void documentNoteReportsPerItemFailure();
     void highlightMetadataUsesSupportedCliCommands();
     void markdownIsFormattedAsRichText();
+    void readerStyleUsesDefaultsAndReloadsBoundedToml();
     void detailAcceptsMarkdownJsonString();
     void persistentArticleCacheLoadsImmediatelyAndClears();
     void persistentLibraryCacheLoadsBeforeRefresh();
@@ -54,6 +55,7 @@ private:
 
 void BackendTests::initTestCase() {
     qputenv("XDG_DATA_HOME", m_tempDir.filePath("xdg-data").toLocal8Bit());
+    qputenv("XDG_CONFIG_HOME", m_tempDir.filePath("xdg-config").toLocal8Bit());
     QDir(QStandardPaths::writableLocation(QStandardPaths::AppDataLocation)
          + QStringLiteral("/article-cache")).removeRecursively();
     QVERIFY(m_tempDir.isValid());
@@ -71,7 +73,7 @@ void BackendTests::initTestCase() {
               "  *reader-search-documents*) printf '%s\\n' '{\"results\":[{\"id\":\"remote\",\"title\":\"Remote result\"}]}' ;;\n"
               "  *--page-cursor*) if [ \"$OMAWISE_PAGINATION_TEST\" = 1 ]; then printf '%s\\n' '{\"results\":[{\"id\":\"second\",\"title\":\"Second page\"},{\"id\":\"local\",\"title\":\"Duplicate row\"}],\"nextPageCursor\":null}' ; else printf '%s\\n' '{\"results\":[]}' ; fi ;;\n"
               "  *reader-list-documents*) if [ \"$OMAWISE_AUTH_FAILURE\" = 1 ]; then printf '%s\\n' '401 Unauthorized' >&2; exit 1; elif [ \"$OMAWISE_PAGINATION_TEST\" = 1 ]; then printf '%s\\n' '{\"results\":[{\"id\":\"local\",\"title\":\"Local article\",\"author\":\"A. Writer\"}],\"nextPageCursor\":\"cursor-1\"}' ; else printf '%s\\n' '{\"results\":[{\"id\":\"local\",\"title\":\"Local article\",\"author\":\"A. Writer\"}]}' ; fi ;;\n"
-              "  *reader-get-document-details*) if [ \"$OMAWISE_DETAIL_FAIL\" = 1 ]; then printf '%s\\n' 'temporary detail failure' >&2; exit 1; elif [ \"$OMAWISE_DETAIL_DELAY\" = 1 ]; then sleep 1; fi; if [ \"$OMAWISE_DETAIL_JSON_STRING\" = 1 ]; then printf '%s\\n' '\"# JSON article\\n\\nBody paragraph.\"' ; else printf '%s\\n' '# Article' '' 'First paragraph for selection.' '' 'Second paragraph for keyboard navigation.' ; fi ;;\n"
+              "  *reader-get-document-details*) if [ \"$OMAWISE_DETAIL_FAIL\" = 1 ]; then printf '%s\\n' 'temporary detail failure' >&2; exit 1; elif [ \"$OMAWISE_DETAIL_DELAY\" = 1 ]; then sleep 1; fi; if [ \"$OMAWISE_DETAIL_JSON_STRING\" = 1 ]; then printf '%s\\n' '\"# JSON article\\n\\nBody paragraph.\"' ; elif [ \"$OMAWISE_FORMATTING_FIXTURE\" = 1 ]; then printf '%s\\n' '# Article' '' '## Section heading' '' 'First paragraph for selection with several lines of text to check readable measure and line spacing.' '' 'Second paragraph for keyboard navigation.' '' '> A useful blockquote for the article preview.' '' '- First list item' '- Second list item' '' '`inline code` and [a sample link](https://example.com).' '' '```cpp' 'int answer = 42;' '```' ; else printf '%s\\n' '# Article' '' 'First paragraph for selection.' '' 'Second paragraph for keyboard navigation.' ; fi ;;\n"
               "  *reader-set-highlight-notes*) printf '%s\\n' '{\"success\":true}' ;;\n"
               "  *reader-add-tags-to-highlight*) printf '%s\\n' '{\"success\":true}' ;;\n"
               "  *reader-remove-tags-from-highlight*) printf '%s\\n' '{\"success\":true}' ;;\n"
@@ -236,6 +238,36 @@ void BackendTests::markdownIsFormattedAsRichText() {
     QVERIFY(html.contains("Heading"));
     QVERIFY(html.contains("href=\"https://example.com\""));
     QVERIFY(html.contains("#12ab34", Qt::CaseInsensitive));
+}
+
+void BackendTests::readerStyleUsesDefaultsAndReloadsBoundedToml() {
+    QVERIFY(QDir().mkpath(QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation)));
+    const QString configDirectory = QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation)
+                                   + QStringLiteral("/omawise");
+    QDir(configDirectory).removeRecursively();
+    Theme theme;
+    QCOMPARE(theme.readerStyle().value("fontFamily").toString(), QStringLiteral("monospace"));
+    QCOMPARE(theme.readerStyle().value("fontSizePx").toInt(), 12);
+    QCOMPARE(theme.readerStyle().value("lineSpacing").toDouble(), 1.2);
+    QCOMPARE(theme.readerStyle().value("paragraphSpacingPt").toInt(), 18);
+    QCOMPARE(theme.readerStyle().value("contentWidth").toInt(), 760);
+
+    QVERIFY(QDir().mkpath(configDirectory));
+    QFile settings(configDirectory + QStringLiteral("/reader.toml"));
+    QVERIFY(settings.open(QIODevice::WriteOnly | QIODevice::Text));
+    settings.write("[reader]\nfont_family = \"Atkinson Hyperlegible\"\nfont_size_px = 200\nline_spacing = 1.7\ncontent_width = 1300\n");
+    settings.close();
+    QTRY_COMPARE_WITH_TIMEOUT(theme.readerStyle().value("fontFamily").toString(), QStringLiteral("Atkinson Hyperlegible"), 1500);
+    QCOMPARE(theme.readerStyle().value("fontSizePx").toInt(), 48);
+    QCOMPARE(theme.readerStyle().value("lineSpacing").toDouble(), 1.7);
+    QCOMPARE(theme.readerStyle().value("contentWidth").toInt(), 1200);
+
+    QVERIFY(settings.open(QIODevice::WriteOnly | QIODevice::Text | QIODevice::Truncate));
+    settings.write("[reader]\nfont_size_px = invalid\nline_spacing = 0\n");
+    settings.close();
+    QTRY_COMPARE_WITH_TIMEOUT(theme.readerStyle().value("fontSizePx").toInt(), 12, 1500);
+    QCOMPARE(theme.readerStyle().value("lineSpacing").toDouble(), 1.0);
+    QDir(configDirectory).removeRecursively();
 }
 
 void BackendTests::detailAcceptsMarkdownJsonString() {
@@ -471,6 +503,7 @@ void BackendTests::qmlSearchActivationAndReaderSelection() {
     QVERIFY(window->findChild<QObject *>(QStringLiteral("documentMetadataPane")));
 
     QVERIFY(QMetaObject::invokeMethod(list, "forceActiveFocus"));
+    qputenv("OMAWISE_FORMATTING_FIXTURE", "1");
     QTest::keyClick(window, Qt::Key_Return);
     QTRY_VERIFY_WITH_TIMEOUT(!backend.busy(), 3000);
     QTRY_COMPARE_WITH_TIMEOUT(backend.selectedHighlights().size(), 1, 3000);
@@ -479,7 +512,9 @@ void BackendTests::qmlSearchActivationAndReaderSelection() {
     QObject *article = window->findChild<QObject *>(QStringLiteral("articleText"));
     QVERIFY(article);
     QVERIFY(QMetaObject::invokeMethod(article, "forceActiveFocus"));
+    qunsetenv("OMAWISE_FORMATTING_FIXTURE");
     QTRY_VERIFY_WITH_TIMEOUT(article->property("activeFocus").toBool(), 1000);
+    QTest::keyClick(window, Qt::Key_Down);
     QTest::keyClick(window, Qt::Key_Down);
     QTest::keyClick(window, Qt::Key_Down);
     QTRY_VERIFY_WITH_TIMEOUT(article->property("selectedText").toString().contains(QStringLiteral("First paragraph")), 1000);

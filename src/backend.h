@@ -87,7 +87,8 @@ public:
     Q_INVOKABLE void clearError();
     Q_INVOKABLE void clearArticleCache();
     Q_INVOKABLE bool openExternalUrl(const QString &url);
-    Q_INVOKABLE QString formattedMarkdown(const QString &markdown, const QString &accent) const;
+    Q_INVOKABLE QString formattedMarkdown(const QString &markdown, const QString &accent,
+                                          const QVariantMap &readerStyle = {}) const;
 
 signals:
     void documentsChanged();
