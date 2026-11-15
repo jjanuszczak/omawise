@@ -10,6 +10,8 @@
 #include <QPalette>
 #include <QStandardPaths>
 #include <QRegularExpression>
+#include <QSaveFile>
+#include <QLocale>
 #include <cmath>
 
 Theme::Theme(QObject *parent)
@@ -96,6 +98,62 @@ void Theme::reloadReaderStyle() {
         m_readerStyle = style;
         emit changed();
     }
+}
+
+bool Theme::saveReaderStyle(const QVariantMap &style) {
+    QVariantMap updated = m_readerStyle;
+    const QString family = style.value("fontFamily", updated.value("fontFamily")).toString().trimmed();
+    if (!family.isEmpty() && family.size() <= 80
+        && QRegularExpression("^[A-Za-z0-9 _,-]+$").match(family).hasMatch())
+        updated["fontFamily"] = family;
+
+    bool ok = false;
+    const double fontSize = style.value("fontSizePx", updated.value("fontSizePx")).toDouble(&ok);
+    if (ok && std::isfinite(fontSize)) updated["fontSizePx"] = qBound(12, qRound(fontSize), 48);
+    const double lineSpacing = style.value("lineSpacing", updated.value("lineSpacing")).toDouble(&ok);
+    if (ok && std::isfinite(lineSpacing))
+        updated["lineSpacing"] = qBound(1.0, qRound(lineSpacing * 10.0) / 10.0, 2.2);
+    const double paragraphSpacing = style.value("paragraphSpacingPt", updated.value("paragraphSpacingPt")).toDouble(&ok);
+    if (ok && std::isfinite(paragraphSpacing))
+        updated["paragraphSpacingPt"] = qBound(0, qRound(paragraphSpacing), 36);
+    const double contentWidth = style.value("contentWidth", updated.value("contentWidth")).toDouble(&ok);
+    if (ok && std::isfinite(contentWidth))
+        updated["contentWidth"] = qBound(480, qRound(contentWidth), 1200);
+
+    if (!QDir().mkpath(m_configDirectory)) {
+        m_readerStyleError = tr("Could not create the Omawise settings directory.");
+        emit changed();
+        return false;
+    }
+    QSaveFile file(m_configFile);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
+        m_readerStyleError = tr("Could not write reader.toml: %1").arg(file.errorString());
+        emit changed();
+        return false;
+    }
+    const QString contents = QStringLiteral(
+        "# Reader typography. Changes apply automatically while Omawise is running.\n"
+        "[reader]\n"
+        "font_family = \"%1\"\n"
+        "font_size_px = %2\n"
+        "line_spacing = %3\n"
+        "paragraph_spacing_pt = %4\n"
+        "content_width = %5\n")
+        .arg(updated.value("fontFamily").toString())
+        .arg(updated.value("fontSizePx").toInt())
+        .arg(QLocale::c().toString(updated.value("lineSpacing").toDouble(), 'f', 1))
+        .arg(updated.value("paragraphSpacingPt").toInt())
+        .arg(updated.value("contentWidth").toInt());
+    const QByteArray bytes = contents.toUtf8();
+    if (file.write(bytes) != bytes.size() || !file.commit()) {
+        m_readerStyleError = tr("Could not save reader.toml: %1").arg(file.errorString());
+        emit changed();
+        return false;
+    }
+    m_readerStyleError.clear();
+    reloadReaderStyle();
+    emit changed();
+    return true;
 }
 
 Theme::~Theme() {

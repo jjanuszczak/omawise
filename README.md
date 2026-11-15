@@ -28,7 +28,11 @@ The app icon and sidebar use the vector mark in `assets/omawise-mark.svg`; dark 
 
 ## Reader typography
 
-Article typography follows Readwise Reader's adjustable type, size, line spacing, and content width model while keeping Omawise's current Omarchy dark colors and monospace font as defaults. Defaults use 12 px text, 1.2 line spacing, and 18 pt between paragraphs. To customize it, copy `config/reader.toml` to `~/.config/omawise/reader.toml`; the checkout command is `mkdir -p ~/.config/omawise && cp config/reader.toml ~/.config/omawise/reader.toml`. Omawise reloads the file while running. The supported options and bounds are documented in the example and in the packaged agent skill at `/usr/share/omawise/skills/omawise-reader-settings/SKILL.md`.
+Article typography follows Readwise Reader's adjustable type, size, line spacing, and content width model while keeping Omawise's current Omarchy dark colors and monospace font as defaults. Defaults use 12 px text, 1.2 line spacing, and 18 pt between paragraphs. Use **Aa → Reader appearance** to change the font family, size, line spacing, paragraph spacing, and content width; each choice saves to `~/.config/omawise/reader.toml` and applies while Omawise is running. The same settings can be edited by hand, and `config/reader.toml` is the example file. Supported options and bounds are documented there and in the packaged agent skill at `/usr/share/omawise/skills/omawise-reader-settings/SKILL.md`.
+
+The article toolbar uses compact Inbox, Later, and Archive icons; the current location is marked and selecting another icon moves the article. **Aa** opens the current typography settings, and the overflow menu holds **Copy Markdown**, highlight, and **Open in Reader** actions. Copy Markdown includes YAML frontmatter with the article metadata.
+
+In the library metadata pane, the document tag field loads the tag list for your Reader library when opened. Choose a suggestion to add it, or type a new tag and press Enter to create it.
 
 ## Shortcuts
 

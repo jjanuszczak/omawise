@@ -14,6 +14,7 @@ class Theme : public QObject {
     Q_PROPERTY(int radius READ radius NOTIFY changed)
     Q_PROPERTY(QString uiFont READ uiFont CONSTANT)
     Q_PROPERTY(QVariantMap readerStyle READ readerStyle NOTIFY changed)
+    Q_PROPERTY(QString readerStyleError READ readerStyleError NOTIFY changed)
 
 public:
     explicit Theme(QObject *parent = nullptr);
@@ -23,6 +24,8 @@ public:
     int radius() const { return m_radius; }
     QString uiFont() const { return QStringLiteral("monospace"); }
     QVariantMap readerStyle() const { return m_readerStyle; }
+    QString readerStyleError() const { return m_readerStyleError; }
+    Q_INVOKABLE bool saveReaderStyle(const QVariantMap &style);
 
 signals:
     void changed();
@@ -35,6 +38,7 @@ private:
     QString m_configDirectory;
     QString m_configFile;
     QVariantMap m_readerStyle;
+    QString m_readerStyleError;
     QString m_accent = "#FFD60A";
     int m_radius = 0;
     QFileSystemWatcher m_watcher;

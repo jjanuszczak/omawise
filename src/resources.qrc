@@ -2,5 +2,9 @@
   <qresource prefix="/">
     <file>Main.qml</file>
     <file alias="assets/omawise-mark.svg">../assets/omawise-mark.svg</file>
+    <file alias="icons/inbox.svg">../assets/icons/inbox.svg</file>
+    <file alias="icons/later.svg">../assets/icons/later.svg</file>
+    <file alias="icons/archive.svg">../assets/icons/archive.svg</file>
+    <file alias="icons/back.svg">../assets/icons/back.svg</file>
   </qresource>
 </RCC>

@@ -20,6 +20,7 @@
 #include <QRegularExpression>
 #include <QFont>
 #include <QGuiApplication>
+#include <QClipboard>
 #include <QUrl>
 #include <QUrlQuery>
 #include <QPointer>
@@ -67,14 +68,64 @@ QStringList tagNames(const QJsonValue &value) {
 
 bool isHtmlContent(const QString &content) {
     static const QRegularExpression htmlStart(
-        QStringLiteral("^<(?:!doctype|html|article|h[1-6]|p|div|section|main|ul|ol|li|blockquote|pre|table|figure|img|hr|br)\\b"),
+        QStringLiteral("^<(?:!doctype|html|article|h[1-6]|p|div|section|main|ul|ol|li|blockquote|pre|table|figure|img|hr|br|a|span|b|i|strong|em|code)\\b"),
         QRegularExpression::CaseInsensitiveOption);
     return htmlStart.match(content.trimmed()).hasMatch();
+}
+
+QString yamlQuotedString(const QString &value) {
+    QJsonArray array;
+    array.append(value);
+    const QByteArray json = QJsonDocument(array).toJson(QJsonDocument::Compact);
+    return QString::fromUtf8(json.mid(1, json.size() - 2));
 }
 }
 
 Backend::Backend(QObject *parent) : QObject(parent) {
     connect(&m_process, &QProcess::finished, this, &Backend::finish);
+    connect(&m_documentTagsProcess, &QProcess::finished, this,
+            [this](int exitCode, QProcess::ExitStatus exitStatus) {
+        m_documentTagsInProgress = false;
+        m_documentTagsLoaded = true;
+        if (exitCode == 0 && exitStatus == QProcess::NormalExit) {
+            QJsonParseError parseError;
+            const QJsonValue value = QJsonValue::fromJson(m_documentTagsProcess.readAllStandardOutput(), &parseError);
+            QJsonArray rows;
+            if (value.isArray()) {
+                rows = value.toArray();
+            } else if (value.isObject()) {
+                QJsonObject root = value.toObject();
+                for (const QString key : {"results", "tags", "items", "data"}) {
+                    if (root.value(key).isArray()) {
+                        rows = root.value(key).toArray();
+                        break;
+                    }
+                }
+            }
+            if (parseError.error == QJsonParseError::NoError) {
+                for (const QJsonValue &row : rows) {
+                    QString name;
+                    if (row.isString())
+                        name = row.toString().trimmed();
+                    else if (row.isObject()) {
+                        const QJsonObject tag = row.toObject();
+                        name = tag.value("name").toString(tag.value("key").toString()).trimmed();
+                    }
+                    if (!name.isEmpty() && !m_availableDocumentTags.contains(name, Qt::CaseInsensitive))
+                        m_availableDocumentTags.append(name);
+                }
+            }
+        }
+        emit availableDocumentTagsChanged();
+    });
+    connect(&m_documentTagsProcess, &QProcess::errorOccurred, this,
+            [this](QProcess::ProcessError error) {
+        if (error != QProcess::FailedToStart)
+            return;
+        m_documentTagsInProgress = false;
+        m_documentTagsLoaded = true;
+        emit availableDocumentTagsChanged();
+    });
     m_timeout.setSingleShot(true);
     m_timeout.setInterval(30000);
     connect(&m_timeout, &QTimer::timeout, this, [this] {
@@ -293,6 +344,9 @@ void Backend::clearPersistentReaderCache() {
     m_selectedUrl.clear();
     m_selectedNote.clear();
     m_selectedTags.clear();
+    m_availableDocumentTags.clear();
+    m_documentTagsLoaded = false;
+    m_documentTagsInProgress = false;
     m_documents.clear();
     m_libraryDocuments.clear();
     m_nextCursor.clear();
@@ -303,6 +357,7 @@ void Backend::clearPersistentReaderCache() {
     emit selectedDocumentChanged();
     emit selectedHighlightsChanged();
     emit hasMoreDocumentsChanged();
+    emit availableDocumentTagsChanged();
 }
 
 void Backend::setApiLoginBusy(bool busy) {
@@ -909,6 +964,15 @@ void Backend::saveDocumentTags(const QString &id, const QStringList &tags) {
     run({"--json", "reader-bulk-edit-document-metadata", "--documents", payload}, Operation::SaveTags);
 }
 
+void Backend::loadDocumentTags() {
+    if (m_documentTagsLoaded || m_documentTagsInProgress)
+        return;
+    m_availableDocumentTags.clear();
+    m_documentTagsInProgress = true;
+    emit availableDocumentTagsChanged();
+    m_documentTagsProcess.start(QStringLiteral("readwise"), {"--json", "reader-list-tags"});
+}
+
 void Backend::createHighlight(const QString &documentId, const QString &text) {
     if (documentId.isEmpty() || text.trimmed().isEmpty())
         return;
@@ -1134,6 +1198,11 @@ QString Backend::formattedMarkdown(const QString &markdown, const QString &accen
     for (QTextBlock block = document.begin(); block.isValid(); block = block.next()) {
         QTextBlockFormat format = block.blockFormat();
         format.setLineHeight(lineSpacing * 100.0, QTextBlockFormat::ProportionalHeight);
+        if (format.headingLevel() == 0 && format.indent() == 0 && !block.textList()
+            && !format.hasProperty(QTextFormat::BlockCodeLanguage)) {
+            const qreal paragraphSpacingPx = paragraphSpacing * (96.0 / 72.0);
+            format.setBottomMargin(paragraphSpacingPx);
+        }
         QTextCursor cursor(block);
         cursor.setBlockFormat(format);
     }
@@ -1153,6 +1222,66 @@ QString Backend::formattedMarkdown(const QString &markdown, const QString &accen
     }
     formattedHtml += html.mid(offset);
     return formattedHtml;
+}
+
+bool Backend::copyArticleMarkdown(const QString &content, const QVariantMap &metadata) {
+    if (content.isEmpty() || !QGuiApplication::instance())
+        return false;
+
+    QString markdown = content;
+    if (isHtmlContent(content)) {
+        QTextDocument document;
+        document.setHtml(content);
+        markdown = document.toMarkdown();
+    }
+
+    QString frontmatter = QStringLiteral("---\n");
+    const QString sourceKey = metadata.value(QStringLiteral("site_name")).toString().trimmed().isEmpty()
+        ? QStringLiteral("source") : QStringLiteral("site_name");
+    const QList<QPair<QString, QString>> fields{
+        {QStringLiteral("id"), QStringLiteral("id")},
+        {QStringLiteral("title"), QStringLiteral("title")},
+        {QStringLiteral("author"), QStringLiteral("author")},
+        {QStringLiteral("url"), QStringLiteral("url")},
+        {QStringLiteral("source"), sourceKey},
+        {QStringLiteral("category"), QStringLiteral("category")},
+        {QStringLiteral("location"), QStringLiteral("location")},
+        {QStringLiteral("published_date"), QStringLiteral("published_date")},
+        {QStringLiteral("saved_at"), QStringLiteral("saved_at")},
+        {QStringLiteral("reading_time"), QStringLiteral("reading_time")},
+        {QStringLiteral("summary"), QStringLiteral("summary")}
+    };
+    for (const auto &field : fields) {
+        const QString value = metadata.value(field.second).toString().trimmed();
+        if (!value.isEmpty())
+            frontmatter += field.first + QStringLiteral(": ") + yamlQuotedString(value) + QLatin1Char('\n');
+    }
+
+    QStringList tags;
+    const QVariant tagValue = metadata.value(QStringLiteral("tags"));
+    if (tagValue.canConvert<QStringList>())
+        tags = tagValue.toStringList();
+    if (tags.isEmpty()) {
+        for (const QVariant &value : tagValue.toList()) {
+            const QString tag = value.typeId() == QMetaType::QVariantMap
+                ? value.toMap().value(QStringLiteral("name")).toString()
+                : value.toString();
+            if (!tag.trimmed().isEmpty())
+                tags.append(tag.trimmed());
+        }
+    }
+    if (!tags.isEmpty()) {
+        frontmatter += QStringLiteral("tags:\n");
+        for (const QString &tag : tags)
+            frontmatter += QStringLiteral("  - ") + yamlQuotedString(tag) + QLatin1Char('\n');
+    }
+    frontmatter += QStringLiteral("---\n\n");
+
+    if (!markdown.endsWith(QLatin1Char('\n')))
+        markdown += QLatin1Char('\n');
+    QGuiApplication::clipboard()->setText(frontmatter + markdown);
+    setStatus(tr("Article Markdown copied to clipboard"));
+    return true;
 }
 
 QVariantList Backend::selectedHeadings() const {
