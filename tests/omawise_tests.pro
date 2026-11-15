@@ -1,5 +1,6 @@
 QT += core gui testlib quick quickcontrols2 network
-CONFIG += c++17 console testcase link_pkgconfig
+CONFIG += c++17 console testcase link_pkgconfig qtquickcompiler
+DEFINES += OMAWISE_TESTING
 PKGCONFIG += libsecret-1
 CONFIG -= app_bundle
 TEMPLATE = app

@@ -85,6 +85,7 @@ public:
     Q_INVOKABLE void loadHighlights();
     Q_INVOKABLE void login();
     Q_INVOKABLE void clearError();
+    Q_INVOKABLE void clearArticleCache();
     Q_INVOKABLE bool openExternalUrl(const QString &url);
     Q_INVOKABLE QString formattedMarkdown(const QString &markdown, const QString &accent) const;
 
@@ -105,6 +106,7 @@ signals:
 
 private:
     enum class Operation { None, List, ListMore, Search, TitleSearch, Detail, ApiDetail, ValidateApiToken, Highlights, Archive, Move, SaveNote, SaveTags, CreateHighlight, SaveHighlightNote, AddHighlightTags, RemoveHighlightTags, Login };
+    enum class PendingHighlightEdit { None, SaveNote, AddTags, RemoveTags };
     void run(const QStringList &arguments, Operation operation);
     void runApiGet(const QUrl &url, Operation operation, const QString &token = {});
     void handleApiReply(QNetworkReply *reply);
@@ -121,6 +123,17 @@ private:
     void setStatus(const QString &status);
     void updateDocumentRows(const QString &key, const QVariant &value);
     void processQueuedWork();
+    bool refreshHighlightsBeforeEdit(const QString &documentId, const QString &highlightId,
+                                     PendingHighlightEdit edit, const QString &note = {},
+                                     const QStringList &tags = {});
+    QString persistentArticleCachePath(const QString &id) const;
+    QString readPersistentArticle(const QString &id);
+    void writePersistentArticle(const QString &id, const QString &content);
+    QString persistentLibraryCachePath(const QString &location) const;
+    void readPersistentLibrary(const QString &location);
+    void writePersistentLibrary(const QString &location);
+    void trimPersistentArticleCache() const;
+    void clearPersistentReaderCache();
     static QVariantList resultRows(const QJsonDocument &document);
     static QVariantList highlightRows(const QJsonDocument &document);
     static QJsonObject unwrapObject(const QJsonDocument &document);
@@ -172,7 +185,11 @@ private:
     QString m_pendingHighlightId;
     QString m_pendingHighlightNote;
     QStringList m_pendingHighlightTags;
+    PendingHighlightEdit m_pendingHighlightEdit = PendingHighlightEdit::None;
+    bool m_dispatchingFreshHighlightEdit = false;
     QHash<QString, QString> m_contentCache;
     QHash<QString, QVariantList> m_highlightsCache;
     QSet<QString> m_highlightsLoaded;
+    static constexpr qint64 MaxPersistentArticleCacheBytes = 100 * 1024 * 1024;
+    static constexpr qint64 MaxPersistentArticleBytes = 16 * 1024 * 1024;
 };

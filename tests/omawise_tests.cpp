@@ -1,6 +1,15 @@
 #include "backend.h"
 
 #include <QFile>
+#include <QFileInfo>
+#include <QDebug>
+#include <QDir>
+#include <QStandardPaths>
+#include <QCryptographicHash>
+#include <QElapsedTimer>
+#include <QDateTime>
+#include <QJsonDocument>
+#include <QCoreApplication>
 #include <QProcessEnvironment>
 #include <QSignalSpy>
 #include <QTemporaryDir>
@@ -11,6 +20,7 @@
 #include <QQuickItem>
 #include <QTest>
 #include <QtTest>
+#include <algorithm>
 
 #include "theme.h"
 
@@ -29,6 +39,10 @@ private slots:
     void highlightMetadataUsesSupportedCliCommands();
     void markdownIsFormattedAsRichText();
     void detailAcceptsMarkdownJsonString();
+    void persistentArticleCacheLoadsImmediatelyAndClears();
+    void persistentLibraryCacheLoadsBeforeRefresh();
+    void cachedArticleOpenLatencyDistribution();
+    void cachedLibraryFirstFrameLatencyDistribution();
     void qmlSearchActivationAndReaderSelection();
 
 private:
@@ -39,6 +53,9 @@ private:
 };
 
 void BackendTests::initTestCase() {
+    qputenv("XDG_DATA_HOME", m_tempDir.filePath("xdg-data").toLocal8Bit());
+    QDir(QStandardPaths::writableLocation(QStandardPaths::AppDataLocation)
+         + QStringLiteral("/article-cache")).removeRecursively();
     QVERIFY(m_tempDir.isValid());
     m_binDir = m_tempDir.filePath("bin");
     QVERIFY(QDir().mkpath(m_binDir));
@@ -50,11 +67,11 @@ void BackendTests::initTestCase() {
               "printf '%s\\n' \"$*\" >> \"$OMAWISE_TEST_LOG\"\n"
               "case \"$*\" in\n"
               "  *reader-bulk-edit-document-metadata*) if [ \"$OMAWISE_NOTE_FAILURE\" = 1 ]; then printf '%s\\n' '{\"results\":[{\"id\":\"doc-42\",\"success\":false,\"error\":\"Document not found\"}]}' ; else printf '%s\\n' '{\"results\":[{\"id\":\"doc-42\",\"success\":true}]}' ; fi ;;\n"
-              "  *--title-search*) printf '%s\\n' '{\"results\":[{\"id\":\"title-only\",\"title\":\"Title-only result\"}]}' ;;\n"
+              "  *--title-search*) printf '%s\\n' '{\"results\":[{\"document_id\":\"title-only\",\"title\":\"Title-only result\"}]}' ;;\n"
               "  *reader-search-documents*) printf '%s\\n' '{\"results\":[{\"id\":\"remote\",\"title\":\"Remote result\"}]}' ;;\n"
               "  *--page-cursor*) if [ \"$OMAWISE_PAGINATION_TEST\" = 1 ]; then printf '%s\\n' '{\"results\":[{\"id\":\"second\",\"title\":\"Second page\"},{\"id\":\"local\",\"title\":\"Duplicate row\"}],\"nextPageCursor\":null}' ; else printf '%s\\n' '{\"results\":[]}' ; fi ;;\n"
               "  *reader-list-documents*) if [ \"$OMAWISE_AUTH_FAILURE\" = 1 ]; then printf '%s\\n' '401 Unauthorized' >&2; exit 1; elif [ \"$OMAWISE_PAGINATION_TEST\" = 1 ]; then printf '%s\\n' '{\"results\":[{\"id\":\"local\",\"title\":\"Local article\",\"author\":\"A. Writer\"}],\"nextPageCursor\":\"cursor-1\"}' ; else printf '%s\\n' '{\"results\":[{\"id\":\"local\",\"title\":\"Local article\",\"author\":\"A. Writer\"}]}' ; fi ;;\n"
-              "  *reader-get-document-details*) if [ \"$OMAWISE_DETAIL_JSON_STRING\" = 1 ]; then printf '%s\\n' '\"# JSON article\\n\\nBody paragraph.\"' ; else printf '%s\\n' '# Article' '' 'First paragraph for selection.' '' 'Second paragraph for keyboard navigation.' ; fi ;;\n"
+              "  *reader-get-document-details*) if [ \"$OMAWISE_DETAIL_FAIL\" = 1 ]; then printf '%s\\n' 'temporary detail failure' >&2; exit 1; elif [ \"$OMAWISE_DETAIL_DELAY\" = 1 ]; then sleep 1; fi; if [ \"$OMAWISE_DETAIL_JSON_STRING\" = 1 ]; then printf '%s\\n' '\"# JSON article\\n\\nBody paragraph.\"' ; else printf '%s\\n' '# Article' '' 'First paragraph for selection.' '' 'Second paragraph for keyboard navigation.' ; fi ;;\n"
               "  *reader-set-highlight-notes*) printf '%s\\n' '{\"success\":true}' ;;\n"
               "  *reader-add-tags-to-highlight*) printf '%s\\n' '{\"success\":true}' ;;\n"
               "  *reader-remove-tags-from-highlight*) printf '%s\\n' '{\"success\":true}' ;;\n"
@@ -208,6 +225,9 @@ void BackendTests::highlightMetadataUsesSupportedCliCommands() {
     QVERIFY(calls.contains("reader-set-highlight-notes --document-id doc-42 --highlight-document-id highlight-1 --notes A useful annotation"));
     QVERIFY(calls.contains("reader-add-tags-to-highlight --document-id doc-42 --highlight-document-id highlight-1 --tag-names [\"field notes\",\"Research\"]"));
     QVERIFY(calls.contains("reader-remove-tags-from-highlight --document-id doc-42 --highlight-document-id highlight-1 --tag-names [\"research\"]"));
+    const qsizetype editAt = calls.indexOf("reader-set-highlight-notes --document-id doc-42");
+    const qsizetype refreshedAt = calls.lastIndexOf("reader-get-document-highlights --document-id doc-42", editAt);
+    QVERIFY(refreshedAt >= 0 && editAt > refreshedAt);
 }
 
 void BackendTests::markdownIsFormattedAsRichText() {
@@ -225,6 +245,172 @@ void BackendTests::detailAcceptsMarkdownJsonString() {
     QTRY_COMPARE_WITH_TIMEOUT(backend.selectedContent(), QString("# JSON article\n\nBody paragraph."), 3000);
     QTRY_VERIFY_WITH_TIMEOUT(!backend.busy(), 3000);
     qunsetenv("OMAWISE_DETAIL_JSON_STRING");
+}
+
+void BackendTests::persistentArticleCacheLoadsImmediatelyAndClears() {
+    const QString expected = QStringLiteral("# Article\n\nFirst paragraph for selection.\n\nSecond paragraph for keyboard navigation.");
+    {
+        Backend first;
+        first.openDocument("persistent-article", "Persisted title", "Writer", "https://example.com/article");
+        QTRY_VERIFY_WITH_TIMEOUT(first.selectedContent().startsWith(expected), 3000);
+        QTRY_VERIFY_WITH_TIMEOUT(!first.busy(), 3000);
+    }
+    const QString cacheRoot = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation)
+        + QStringLiteral("/article-cache");
+    const QByteArray key = QCryptographicHash::hash(QByteArrayLiteral("persistent-article"), QCryptographicHash::Sha256).toHex();
+    const QString articleFile = cacheRoot + QLatin1Char('/') + QString::fromLatin1(key) + QStringLiteral(".json");
+    QVERIFY2(QFile::exists(articleFile), qPrintable(articleFile));
+    const QFile::Permissions permissions = QFileInfo(articleFile).permissions();
+    QVERIFY(permissions.testFlag(QFileDevice::ReadOwner));
+    QVERIFY(permissions.testFlag(QFileDevice::WriteOwner));
+    QVERIFY(!permissions.testFlag(QFileDevice::ReadGroup));
+    QVERIFY(!permissions.testFlag(QFileDevice::ReadOther));
+
+    Backend second;
+    second.openDocument("persistent-article", "", "", "");
+    QCOMPARE(second.selectedContent().trimmed(), expected);
+    QCOMPARE(second.selectedTitle(), QString("Persisted title"));
+    QCOMPARE(second.selectedAuthor(), QString("Writer"));
+    QCOMPARE(second.selectedUrl(), QString("https://example.com/article"));
+    QTRY_VERIFY_WITH_TIMEOUT(!second.busy(), 3000);
+
+    qputenv("OMAWISE_DETAIL_FAIL", "1");
+    Backend staleFallback;
+    staleFallback.openDocument("persistent-article", "", "", "");
+    QCOMPARE(staleFallback.selectedContent().trimmed(), expected);
+    QTRY_VERIFY_WITH_TIMEOUT(!staleFallback.busy(), 3000);
+    QVERIFY(staleFallback.error().contains("temporary detail failure"));
+    QCOMPARE(staleFallback.selectedContent().trimmed(), expected);
+    qunsetenv("OMAWISE_DETAIL_FAIL");
+
+    QFile agedArticle(articleFile);
+    QVERIFY(agedArticle.open(QIODevice::ReadWrite));
+    QVERIFY(agedArticle.setFileTime(QDateTime::currentDateTime().addDays(-31), QFileDevice::FileModificationTime));
+    agedArticle.close();
+    Backend expired;
+    expired.openDocument("persistent-article", "", "", "");
+    QVERIFY(expired.selectedContent().isEmpty());
+    QTRY_VERIFY_WITH_TIMEOUT(!expired.busy(), 3000);
+
+    second.clearArticleCache();
+    QVERIFY(!QFile::exists(articleFile));
+}
+
+void BackendTests::persistentLibraryCacheLoadsBeforeRefresh() {
+    {
+        Backend first;
+        first.refresh();
+        QTRY_VERIFY_WITH_TIMEOUT(!first.busy(), 3000);
+    }
+    QList<qint64> samples;
+    for (int i = 0; i < 21; ++i) {
+        Backend second;
+        QElapsedTimer timer;
+        timer.start();
+        second.refresh();
+        QVERIFY(!second.documents().isEmpty());
+        QCOMPARE(second.documents().first().toMap().value("id").toString(), QString("local"));
+        samples.append(timer.nsecsElapsed() / 1000000);
+        QTRY_VERIFY_WITH_TIMEOUT(!second.busy(), 3000);
+    }
+    std::sort(samples.begin(), samples.end());
+    const qint64 p50 = samples.at(samples.size() / 2);
+    const int p95Index = (samples.size() * 95 + 99) / 100 - 1;
+    const qint64 p95 = samples.at(p95Index);
+    qInfo().noquote() << "cached_library_refresh_to_rows_ms p50=" << p50 << "p95=" << p95;
+    const QString libraryRoot = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation)
+        + QStringLiteral("/article-cache");
+    const QByteArray locationKey = QCryptographicHash::hash(QByteArrayLiteral("new"), QCryptographicHash::Sha256).toHex();
+    const QString libraryFile = QDir(libraryRoot).filePath(QStringLiteral("library-")
+        + QString::fromLatin1(locationKey) + QStringLiteral(".json"));
+    QVERIFY(QFile::exists(libraryFile));
+    QFile file(libraryFile);
+    QVERIFY(file.open(QIODevice::ReadOnly));
+    const QJsonDocument cached = QJsonDocument::fromJson(file.readAll());
+    QVERIFY(cached.isObject());
+    QVERIFY(!cached.object().value(QStringLiteral("rows")).toArray().first().toObject().contains(QStringLiteral("notes")));
+    QVERIFY(!cached.object().value(QStringLiteral("rows")).toArray().first().toObject().contains(QStringLiteral("tags")));
+}
+
+void BackendTests::cachedArticleOpenLatencyDistribution() {
+    const QString expected = QStringLiteral("# Article\n\nFirst paragraph for selection.\n\nSecond paragraph for keyboard navigation.");
+    {
+        Backend seed;
+        seed.openDocument("latency-article", "Latency sample", "Writer", "https://example.com/latency");
+        QTRY_VERIFY_WITH_TIMEOUT(seed.selectedContent().startsWith(expected), 3000);
+        QTRY_VERIFY_WITH_TIMEOUT(!seed.busy(), 3000);
+    }
+
+    QList<qint64> samples;
+    for (int i = 0; i < 21; ++i) {
+        Backend backend;
+        QElapsedTimer timer;
+        timer.start();
+        backend.openDocument("latency-article", "", "", "");
+        QVERIFY(backend.selectedContent().startsWith(expected));
+        samples.append(timer.nsecsElapsed() / 1000000);
+        QTRY_VERIFY_WITH_TIMEOUT(!backend.busy(), 3000);
+    }
+    std::sort(samples.begin(), samples.end());
+    const qint64 p50 = samples.at(samples.size() / 2);
+    const int p95Index = (samples.size() * 95 + 99) / 100 - 1;
+    const qint64 p95 = samples.at(p95Index);
+    qInfo().noquote() << "cached_article_open_to_content_property_ms p50=" << p50 << "p95=" << p95;
+}
+
+void BackendTests::cachedLibraryFirstFrameLatencyDistribution() {
+    {
+        Backend seed;
+        seed.refresh();
+        QTRY_VERIFY_WITH_TIMEOUT(!seed.busy(), 3000);
+        seed.openDocument("local", "Local article", "A. Writer", "https://example.com/local");
+        QTRY_VERIFY_WITH_TIMEOUT(seed.selectedContent().contains("First paragraph"), 3000);
+        QTRY_VERIFY_WITH_TIMEOUT(!seed.busy(), 3000);
+    }
+    Q_INIT_RESOURCE(resources);
+    QList<qint64> samples;
+    QList<qint64> articleSamples;
+    for (int i = 0; i < 21; ++i) {
+        Backend backend;
+        Theme theme;
+        QQmlApplicationEngine engine;
+        engine.rootContext()->setContextProperty("theme", &theme);
+        engine.rootContext()->setContextProperty("backend", &backend);
+        QElapsedTimer timer;
+        timer.start();
+        engine.load(QUrl(QStringLiteral("qrc:/Main.qml")));
+        QVERIFY(!engine.rootObjects().isEmpty());
+        auto *window = qobject_cast<QQuickWindow *>(engine.rootObjects().first());
+        QVERIFY(window);
+        QSignalSpy frameSpy(window, &QQuickWindow::frameSwapped);
+        window->show();
+        window->requestUpdate();
+        QTRY_VERIFY_WITH_TIMEOUT(frameSpy.count() > 0, 3000);
+        QObject *list = window->findChild<QObject *>(QStringLiteral("documentList"));
+        QVERIFY(list);
+        QVERIFY(list->property("count").toInt() > 0);
+        samples.append(timer.nsecsElapsed() / 1000000);
+
+        const int framesBeforeOpen = frameSpy.count();
+        timer.restart();
+        QVERIFY(QMetaObject::invokeMethod(engine.rootObjects().first(), "openSelected"));
+        QTRY_VERIFY_WITH_TIMEOUT(frameSpy.count() > framesBeforeOpen, 3000);
+        QObject *article = window->findChild<QObject *>(QStringLiteral("articleText"));
+        QVERIFY(article);
+        QVERIFY(article->property("text").toString().contains(QStringLiteral("First paragraph")));
+        articleSamples.append(timer.nsecsElapsed() / 1000000);
+        QTRY_VERIFY_WITH_TIMEOUT(!backend.busy(), 3000);
+    }
+    std::sort(samples.begin(), samples.end());
+    const qint64 p50 = samples.at(samples.size() / 2);
+    const int p95Index = (samples.size() * 95 + 99) / 100 - 1;
+    const qint64 p95 = samples.at(p95Index);
+    qInfo().noquote() << "cached_library_to_first_rendered_frame_ms p50=" << p50 << "p95=" << p95;
+    std::sort(articleSamples.begin(), articleSamples.end());
+    const qint64 articleP50 = articleSamples.at(articleSamples.size() / 2);
+    const int articleP95Index = (articleSamples.size() * 95 + 99) / 100 - 1;
+    const qint64 articleP95 = articleSamples.at(articleP95Index);
+    qInfo().noquote() << "cached_article_open_to_rendered_frame_ms p50=" << articleP50 << "p95=" << articleP95;
 }
 
 void BackendTests::qmlSearchActivationAndReaderSelection() {
@@ -386,6 +572,8 @@ void BackendTests::qmlSearchActivationAndReaderSelection() {
 
 int main(int argc, char **argv) {
     QGuiApplication app(argc, argv);
+    app.setOrganizationName(QStringLiteral("Omawise"));
+    app.setApplicationName(QStringLiteral("omawise-tests"));
     BackendTests tests;
     return QTest::qExec(&tests, argc, argv);
 }

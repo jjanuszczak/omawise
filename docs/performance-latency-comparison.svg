@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="880" viewBox="0 0 1440 880">
+<rect width="1440" height="880" fill="#101820"/>
+<g font-family="DejaVu Sans, sans-serif" fill="#f2f4f8">
+ <text x="92" y="88" font-size="34" font-weight="700">Reader latency: CLI vs API vs cache-first</text>
+ <text x="94" y="127" font-size="17" fill="#b6c2cf">Median time for core Reader actions · milliseconds on a logarithmic scale</text>
+</g>
+<g font-family="DejaVu Sans, sans-serif" font-size="16" fill="#f2f4f8">
+ <circle cx="105" cy="171" r="8" fill="#f4a261"/><text x="123" y="177">Readwise CLI</text>
+ <circle cx="301" cy="171" r="8" fill="#54b7d3"/><text x="319" y="177">Direct API</text>
+ <circle cx="463" cy="171" r="8" fill="#7bd88f"/><text x="481" y="177">API + caching</text>
+</g>
+<g font-family="DejaVu Sans, sans-serif" font-size="15" fill="#b6c2cf" stroke="#34434f" stroke-width="1">
+ <line x1="300" y1="222" x2="300" y2="626"/><line x1="558" y1="222" x2="558" y2="626"/><line x1="816" y1="222" x2="816" y2="626"/><line x1="940" y1="222" x2="940" y2="626"/>
+ <line x1="300" y1="626" x2="940" y2="626" stroke="#52616b"/>
+ <text x="300" y="652" text-anchor="middle" stroke="none">10 ms</text><text x="558" y="652" text-anchor="middle" stroke="none">100 ms</text><text x="816" y="652" text-anchor="middle" stroke="none">1 s</text><text x="940" y="652" text-anchor="middle" stroke="none">3 s</text>
+</g>
+<g font-family="DejaVu Sans, sans-serif" fill="#f2f4f8">
+ <text x="94" y="252" font-size="22" font-weight="700">Inbox list</text><text x="94" y="278" font-size="15" fill="#b6c2cf">50 documents</text>
+ <text x="94" y="421" font-size="22" font-weight="700">Article detail</text><text x="94" y="447" font-size="15" fill="#b6c2cf">Open selected article</text>
+</g>
+<g fill="#f4a261"><rect x="300" y="302" width="607" height="35" rx="7"/><rect x="300" y="471" width="592" height="35" rx="7"/></g>
+<g fill="#54b7d3"><rect x="300" y="347" width="483" height="35" rx="7"/><rect x="300" y="516" width="427" height="35" rx="7"/></g>
+<g fill="#7bd88f"><rect x="300" y="392" width="339" height="35" rx="7"/><rect x="300" y="561" width="46" height="35" rx="7"/></g>
+<g font-family="DejaVu Sans, sans-serif" font-size="17" font-weight="600" fill="#f2f4f8">
+ <text x="920" y="326">2,238.5 ms</text><text x="796" y="371">748 ms</text><text x="652" y="416">71 ms</text>
+ <text x="905" y="495">1,924.6 ms</text><text x="740" y="540">446 ms</text><text x="359" y="585">15 ms</text>
+</g>
+<line x1="94" y1="692" x2="1346" y2="692" stroke="#34434f"/>
+<g font-family="DejaVu Sans, sans-serif" fill="#b6c2cf">
+ <text x="94" y="733" font-size="15" font-weight="600" fill="#f2f4f8">How to read this comparison</text>
+ <text x="94" y="762" font-size="14">CLI: 7-run command-to-response medians · API: 5-run direct request medians · API + caching: 21-run time to first usable cached frame.</text>
+ <text x="94" y="789" font-size="14">Cache-first timing excludes server-sync completion; its background refresh used a fake CLI. The timings measure different stages.</text>
+ <text x="94" y="835" font-size="13">Lower is faster · API and CLI p95 values were not available for this comparison.</text>
+</g>
+</svg>
