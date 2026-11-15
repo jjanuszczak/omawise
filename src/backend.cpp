@@ -1,15 +1,22 @@
 #include "backend.h"
 
 #include <QDesktopServices>
+#include <QDir>
+#include <QFile>
+#include <QFileInfo>
+#include <QCryptographicHash>
+#include <QDateTime>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonParseError>
 #include <QStandardPaths>
+#include <QSaveFile>
 #include <QSet>
 #include <QColor>
 #include <QTextDocument>
 #include <QTextBlock>
+#include <QRegularExpression>
 #include <QFont>
 #include <QGuiApplication>
 #include <QUrl>
@@ -17,6 +24,7 @@
 #include <QPointer>
 #include <QThreadPool>
 #include <QMetaObject>
+#include <algorithm>
 #ifdef signals
 #undef signals
 #define OMAWISE_RESTORE_QT_SIGNALS
@@ -55,6 +63,13 @@ QStringList tagNames(const QJsonValue &value) {
     }
     return tags;
 }
+
+bool isHtmlContent(const QString &content) {
+    static const QRegularExpression htmlStart(
+        QStringLiteral("^<(?:!doctype|html|article|h[1-6]|p|div|section|main|ul|ol|li|blockquote|pre|table|figure|img|hr|br)\\b"),
+        QRegularExpression::CaseInsensitiveOption);
+    return htmlStart.match(content.trimmed()).hasMatch();
+}
 }
 
 Backend::Backend(QObject *parent) : QObject(parent) {
@@ -75,14 +90,218 @@ Backend::Backend(QObject *parent) : QObject(parent) {
             const bool failedMetadata = m_operation == Operation::Highlights;
             setBusy(false);
             m_operation = Operation::None;
-            if (failedMetadata)
+            if (failedMetadata) {
                 setMetadataBusy(false);
+                m_pendingHighlightEdit = PendingHighlightEdit::None;
+                m_dispatchingFreshHighlightEdit = false;
+            }
             fail(tr("Could not start the Readwise CLI. Install @readwise/cli and make sure 'readwise' is on PATH."));
         }
     });
     connect(&m_network, &QNetworkAccessManager::finished, this, &Backend::handleApiReply);
     setStatus(tr("Checking saved Readwise connection…"));
+#ifdef OMAWISE_TESTING
+    m_apiTokenReady = true;
+#else
     loadApiTokenFromKeyring();
+#endif
+}
+
+QString Backend::persistentArticleCachePath(const QString &id) const {
+    if (id.isEmpty())
+        return {};
+    const QString root = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation)
+        + QStringLiteral("/article-cache");
+    const QByteArray key = QCryptographicHash::hash(id.toUtf8(), QCryptographicHash::Sha256).toHex();
+    return root + QLatin1Char('/') + QString::fromLatin1(key) + QStringLiteral(".json");
+}
+
+QString Backend::readPersistentArticle(const QString &id) {
+    const QString path = persistentArticleCachePath(id);
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly))
+        return {};
+    const QJsonDocument document = QJsonDocument::fromJson(file.readAll());
+    if (!document.isObject())
+        return {};
+    const QJsonObject entry = document.object();
+    if (entry.value(QStringLiteral("id")).toString() != id)
+        return {};
+    const QDateTime modified = QFileInfo(path).lastModified();
+    if (modified.isValid() && modified < QDateTime::currentDateTime().addDays(-30)) {
+        QFile::remove(path);
+        return {};
+    }
+    if (m_selectedId == id) {
+        if (m_selectedTitle.isEmpty()) m_selectedTitle = entry.value(QStringLiteral("title")).toString();
+        if (m_selectedAuthor.isEmpty()) m_selectedAuthor = entry.value(QStringLiteral("author")).toString();
+        if (m_selectedUrl.isEmpty()) m_selectedUrl = entry.value(QStringLiteral("url")).toString();
+    }
+    const QString content = entry.value(QStringLiteral("content")).toString();
+    if (content.isEmpty())
+        return {};
+    file.close();
+    QFile touched(path);
+    if (touched.open(QIODevice::ReadWrite))
+        touched.setFileTime(QDateTime::currentDateTime(), QFileDevice::FileModificationTime);
+    return content;
+}
+
+void Backend::writePersistentArticle(const QString &id, const QString &content) {
+    const QByteArray contentBytes = content.toUtf8();
+    if (id.isEmpty() || contentBytes.isEmpty() || contentBytes.size() > MaxPersistentArticleBytes)
+        return;
+    const QString path = persistentArticleCachePath(id);
+    const QString root = QFileInfo(path).absolutePath();
+    if (!QDir().mkpath(root)) {
+        return;
+    }
+    QFile::setPermissions(root, QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner);
+    QSaveFile file(path);
+    if (!file.open(QIODevice::WriteOnly)) {
+        return;
+    }
+    file.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner);
+    const QJsonObject entry{{QStringLiteral("id"), id},
+                            {QStringLiteral("content"), content},
+                            {QStringLiteral("title"), m_selectedId == id ? m_selectedTitle : QString()},
+                            {QStringLiteral("author"), m_selectedId == id ? m_selectedAuthor : QString()},
+                            {QStringLiteral("url"), m_selectedId == id ? m_selectedUrl : QString()},
+                            {QStringLiteral("cachedAt"), QDateTime::currentDateTimeUtc().toString(Qt::ISODate)}};
+    if (file.write(QJsonDocument(entry).toJson(QJsonDocument::Compact)) < 0 || !file.commit())
+        return;
+    trimPersistentArticleCache();
+}
+
+QString Backend::persistentLibraryCachePath(const QString &location) const {
+    const QString root = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation)
+        + QStringLiteral("/article-cache");
+    const QByteArray key = QCryptographicHash::hash(location.toUtf8(), QCryptographicHash::Sha256).toHex();
+    return root + QStringLiteral("/library-") + QString::fromLatin1(key) + QStringLiteral(".json");
+}
+
+void Backend::readPersistentLibrary(const QString &location) {
+    const QString path = persistentLibraryCachePath(location);
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly))
+        return;
+    const QDateTime modified = QFileInfo(path).lastModified();
+    if (modified.isValid() && modified < QDateTime::currentDateTime().addSecs(-24 * 60 * 60)) {
+        file.close();
+        QFile::remove(path);
+        return;
+    }
+    const QJsonDocument document = QJsonDocument::fromJson(file.readAll());
+    if (!document.isObject() || document.object().value(QStringLiteral("location")).toString() != location)
+        return;
+    const QJsonObject object = document.object();
+    const QVariantList cachedRows = resultRows(QJsonDocument(object.value(QStringLiteral("rows")).toArray()));
+    if (cachedRows.isEmpty())
+        return;
+    m_libraryDocuments = cachedRows;
+    m_documents = cachedRows;
+    m_nextCursor = object.value(QStringLiteral("nextCursor")).toString();
+    emit documentsChanged();
+    emit hasMoreDocumentsChanged();
+    file.close();
+    QFile touched(path);
+    if (touched.open(QIODevice::ReadWrite))
+        touched.setFileTime(QDateTime::currentDateTime(), QFileDevice::FileModificationTime);
+}
+
+void Backend::writePersistentLibrary(const QString &location) {
+    if (m_libraryDocuments.isEmpty())
+        return;
+    const QString path = persistentLibraryCachePath(location);
+    const QString root = QFileInfo(path).absolutePath();
+    if (!QDir().mkpath(root))
+        return;
+    QFile::setPermissions(root, QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner);
+    QVariantList cacheRows;
+    cacheRows.reserve(m_libraryDocuments.size());
+    for (const QVariant &value : m_libraryDocuments) {
+        QVariantMap row = value.toMap();
+        row.remove(QStringLiteral("notes"));
+        row.remove(QStringLiteral("tags"));
+        cacheRows.append(row);
+    }
+    const QJsonArray rows = QJsonArray::fromVariantList(cacheRows);
+    const QJsonObject entry{{QStringLiteral("location"), location},
+                            {QStringLiteral("rows"), rows},
+                            {QStringLiteral("nextCursor"), m_nextCursor}};
+    const QByteArray bytes = QJsonDocument(entry).toJson(QJsonDocument::Compact);
+    if (bytes.size() > 2 * 1024 * 1024)
+        return;
+    QSaveFile file(path);
+    if (!file.open(QIODevice::WriteOnly))
+        return;
+    file.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner);
+    if (file.write(bytes) < 0 || !file.commit())
+        return;
+    trimPersistentArticleCache();
+}
+
+void Backend::trimPersistentArticleCache() const {
+    const QString root = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation)
+        + QStringLiteral("/article-cache");
+    QDir dir(root);
+    QFileInfoList entries = dir.entryInfoList({QStringLiteral("*.json")}, QDir::Files);
+    std::sort(entries.begin(), entries.end(), [](const QFileInfo &left, const QFileInfo &right) {
+        return left.lastModified() < right.lastModified();
+    });
+    qint64 totalBytes = 0;
+    QFileInfoList retainedEntries;
+    const QDateTime expiry = QDateTime::currentDateTime().addDays(-30);
+    for (const QFileInfo &entry : entries) {
+        if (entry.lastModified() < expiry) {
+            QFile::remove(entry.absoluteFilePath());
+            continue;
+        }
+        retainedEntries.append(entry);
+        totalBytes += entry.size();
+    }
+    for (const QFileInfo &entry : retainedEntries) {
+        if (totalBytes <= MaxPersistentArticleCacheBytes)
+            break;
+        totalBytes -= entry.size();
+        QFile::remove(entry.absoluteFilePath());
+    }
+}
+
+void Backend::clearArticleCache() {
+    m_contentCache.clear();
+    const QString root = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation)
+        + QStringLiteral("/article-cache");
+    const QDir dir(root);
+    for (const QString &entry : dir.entryList({QStringLiteral("*.json")}, QDir::Files)) {
+        if (!entry.startsWith(QStringLiteral("library-")))
+            QFile::remove(dir.filePath(entry));
+    }
+    setStatus(tr("Article cache cleared"));
+}
+
+void Backend::clearPersistentReaderCache() {
+    m_contentCache.clear();
+    m_highlightsCache.clear();
+    m_highlightsLoaded.clear();
+    m_selectedContent.clear();
+    m_selectedHighlights.clear();
+    m_selectedId.clear();
+    m_selectedTitle.clear();
+    m_selectedAuthor.clear();
+    m_selectedUrl.clear();
+    m_selectedNote.clear();
+    m_selectedTags.clear();
+    m_documents.clear();
+    m_libraryDocuments.clear();
+    m_nextCursor.clear();
+    const QString root = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation)
+        + QStringLiteral("/article-cache");
+    QDir(root).removeRecursively();
+    emit documentsChanged();
+    emit selectedDocumentChanged();
+    emit selectedHighlightsChanged();
+    emit hasMoreDocumentsChanged();
 }
 
 void Backend::setApiLoginBusy(bool busy) {
@@ -164,6 +383,7 @@ void Backend::storeApiTokenInKeyring(const QString &token) {
             guard->m_apiTokenRejected = false;
             guard->m_apiTokenReady = true;
             emit guard->apiTokenStateChanged();
+            guard->clearPersistentReaderCache();
             guard->setStatus(guard->tr("Readwise account connected"));
             guard->refresh();
         }, Qt::QueuedConnection);
@@ -200,11 +420,7 @@ void Backend::clearApiTokenFromKeyring() {
             guard->setApiLoginBusy(false);
             guard->setApiLoginError({});
             emit guard->apiTokenStateChanged();
-            guard->m_documents.clear();
-            guard->m_libraryDocuments.clear();
-            guard->m_nextCursor.clear();
-            emit guard->documentsChanged();
-            emit guard->hasMoreDocumentsChanged();
+            guard->clearPersistentReaderCache();
             guard->refresh();
         }, Qt::QueuedConnection);
     });
@@ -269,6 +485,7 @@ void Backend::handleApiReply(QNetworkReply *reply) {
     const QByteArray responseBody = reply->readAll();
     reply->deleteLater();
     setBusy(false);
+    QTimer::singleShot(0, this, &Backend::processQueuedWork);
 
     if (m_timedOut) {
         m_timedOut = false;
@@ -323,6 +540,7 @@ void Backend::handleApiReply(QNetworkReply *reply) {
         m_nextCursor = root.value("nextPageCursor").toString();
         if (previousCursor != m_nextCursor)
             emit hasMoreDocumentsChanged();
+    writePersistentLibrary(m_location);
         emit documentsChanged();
         setApiTokenRejected(false);
         setStatus(tr("%1 documents").arg(m_documents.size()));
@@ -350,6 +568,7 @@ void Backend::handleApiReply(QNetworkReply *reply) {
         setApiTokenRejected(false);
         emit documentsChanged();
         setStatus(tr("%1 documents").arg(m_documents.size()));
+        writePersistentLibrary(m_location);
         return;
     }
     if (operation == Operation::Detail || operation == Operation::ApiDetail) {
@@ -367,6 +586,7 @@ void Backend::handleApiReply(QNetworkReply *reply) {
         if (content.isEmpty())
             content = object.value("content").toString();
         m_contentCache.insert(detailId, content);
+        writePersistentArticle(detailId, content);
         if (m_selectedId != detailId)
             return;
         const QString title = object.value("title").toString();
@@ -452,8 +672,11 @@ void Backend::run(const QStringList &arguments, Operation operation) {
     clearError();
     const QString executable = QStandardPaths::findExecutable("readwise");
     if (executable.isEmpty()) {
-        if (operation == Operation::Highlights)
+        if (operation == Operation::Highlights) {
             setMetadataBusy(false);
+            m_pendingHighlightEdit = PendingHighlightEdit::None;
+            m_dispatchingFreshHighlightEdit = false;
+        }
         setStatus(tr("Readwise CLI not found"));
         fail(tr("Install the official Readwise CLI with npm install -g @readwise/cli, then restart this app."));
         return;
@@ -481,6 +704,7 @@ void Backend::refresh() {
         m_nextCursor.clear();
         emit hasMoreDocumentsChanged();
     }
+    readPersistentLibrary(m_location);
     QString viewName = m_location;
     if (m_location == "new") viewName = tr("Inbox");
     else if (m_location == "later") viewName = tr("Later");
@@ -558,14 +782,18 @@ void Backend::openDocument(const QString &id, const QString &title, const QStrin
     if (id.isEmpty())
         return;
     selectDocument(id, title, author, url, tags, note);
-    if (m_contentCache.contains(id)) {
+    if (!m_contentCache.contains(id)) {
+        const QString persisted = readPersistentArticle(id);
+        if (!persisted.isEmpty())
+            m_contentCache.insert(id, persisted);
+    }
+    const bool hasCachedContent = m_contentCache.contains(id);
+    if (hasCachedContent) {
         m_selectedContent = m_contentCache.value(id);
         emit selectedDocumentChanged();
-        setStatus(tr("Document opened"));
-        loadHighlights();
-        return;
+        setStatus(tr("Opened cached article · refreshing"));
     }
-    if (m_process.state() != QProcess::NotRunning) {
+    if (m_process.state() != QProcess::NotRunning || m_apiReply || m_busy) {
         m_hasQueuedOpen = true;
         m_queuedOpenId = id;
         m_queuedOpenTitle = title;
@@ -577,9 +805,11 @@ void Backend::openDocument(const QString &id, const QString &title, const QStrin
         return;
     }
     m_pendingId = id;
-    m_selectedContent.clear();
-    emit selectedDocumentChanged();
-    setStatus(tr("Opening document…"));
+    if (!hasCachedContent) {
+        m_selectedContent.clear();
+        emit selectedDocumentChanged();
+        setStatus(tr("Opening document…"));
+    }
     m_pendingId = id;
     if (!m_apiToken.isEmpty()) {
         QUrl apiUrl(QStringLiteral("https://readwise.io/api/v3/list/"));
@@ -598,6 +828,10 @@ void Backend::selectDocument(const QString &id, const QString &title, const QStr
                              const QStringList &tags, const QString &note) {
     if (id.isEmpty())
         return;
+    if (m_selectedId != id && m_pendingHighlightEdit != PendingHighlightEdit::None) {
+        m_pendingHighlightEdit = PendingHighlightEdit::None;
+        m_dispatchingFreshHighlightEdit = false;
+    }
     m_selectedId = id;
     m_selectedTitle = title;
     m_selectedAuthor = author;
@@ -686,6 +920,8 @@ void Backend::createHighlight(const QString &documentId, const QString &text) {
 void Backend::saveHighlightNote(const QString &documentId, const QString &highlightId, const QString &note) {
     if (documentId.isEmpty() || highlightId.isEmpty() || documentId != m_selectedId)
         return;
+    if (refreshHighlightsBeforeEdit(documentId, highlightId, PendingHighlightEdit::SaveNote, note))
+        return;
     m_pendingId = documentId;
     m_pendingHighlightId = highlightId;
     m_pendingHighlightNote = note;
@@ -712,6 +948,8 @@ void Backend::addHighlightTags(const QString &documentId, const QString &highlig
     }
     if (cleaned.isEmpty())
         return;
+    if (refreshHighlightsBeforeEdit(documentId, highlightId, PendingHighlightEdit::AddTags, {}, cleaned))
+        return;
     QJsonArray payload = QJsonArray::fromStringList(cleaned);
     m_pendingId = documentId;
     m_pendingHighlightId = highlightId;
@@ -733,6 +971,8 @@ void Backend::removeHighlightTags(const QString &documentId, const QString &high
     }
     if (cleaned.isEmpty())
         return;
+    if (refreshHighlightsBeforeEdit(documentId, highlightId, PendingHighlightEdit::RemoveTags, {}, cleaned))
+        return;
     const QJsonArray payload = QJsonArray::fromStringList(cleaned);
     m_pendingId = documentId;
     m_pendingHighlightId = highlightId;
@@ -741,6 +981,23 @@ void Backend::removeHighlightTags(const QString &documentId, const QString &high
     run({"--json", "reader-remove-tags-from-highlight", "--document-id", documentId,
          "--highlight-document-id", highlightId, "--tag-names",
          QString::fromUtf8(QJsonDocument(payload).toJson(QJsonDocument::Compact))}, Operation::RemoveHighlightTags);
+}
+
+bool Backend::refreshHighlightsBeforeEdit(const QString &documentId, const QString &highlightId,
+                                          PendingHighlightEdit edit, const QString &note,
+                                          const QStringList &tags) {
+    if (m_dispatchingFreshHighlightEdit) {
+        m_dispatchingFreshHighlightEdit = false;
+        return false;
+    }
+    m_pendingHighlightEdit = edit;
+    m_pendingHighlightId = highlightId;
+    m_pendingHighlightNote = note;
+    m_pendingHighlightTags = tags;
+    m_highlightsLoaded.remove(documentId);
+    m_highlightsCache.remove(documentId);
+    loadHighlights();
+    return true;
 }
 
 void Backend::loadHighlights() {
@@ -773,7 +1030,7 @@ void Backend::loadHighlights() {
 }
 
 void Backend::processQueuedWork() {
-    if (m_process.state() != QProcess::NotRunning)
+    if (m_process.state() != QProcess::NotRunning || m_apiReply || m_busy)
         return;
     if (m_hasQueuedOpen) {
         const QString id = m_queuedOpenId;
@@ -785,6 +1042,22 @@ void Backend::processQueuedWork() {
         m_hasQueuedOpen = false;
         m_queuedHighlightId.clear();
         openDocument(id, title, author, url, tags, note);
+        return;
+    }
+    if (m_pendingHighlightEdit != PendingHighlightEdit::None
+        && m_dispatchingFreshHighlightEdit && m_selectedId == m_pendingId) {
+        const PendingHighlightEdit edit = m_pendingHighlightEdit;
+        const QString documentId = m_selectedId;
+        const QString highlightId = m_pendingHighlightId;
+        const QString note = m_pendingHighlightNote;
+        const QStringList tags = m_pendingHighlightTags;
+        m_pendingHighlightEdit = PendingHighlightEdit::None;
+        if (edit == PendingHighlightEdit::SaveNote)
+            saveHighlightNote(documentId, highlightId, note);
+        else if (edit == PendingHighlightEdit::AddTags)
+            addHighlightTags(documentId, highlightId, tags);
+        else if (edit == PendingHighlightEdit::RemoveTags)
+            removeHighlightTags(documentId, highlightId, tags);
         return;
     }
     if (!m_queuedHighlightId.isEmpty()) {
@@ -844,10 +1117,7 @@ QString Backend::formattedMarkdown(const QString &markdown, const QString &accen
         img { max-width: 100%; }
     )CSS").arg(linkColor));
 
-    const QString trimmed = markdown.trimmed();
-    if (trimmed.startsWith("<!DOCTYPE html", Qt::CaseInsensitive)
-        || trimmed.startsWith("<html", Qt::CaseInsensitive)
-        || trimmed.startsWith("<article", Qt::CaseInsensitive)) {
+    if (isHtmlContent(markdown)) {
         document.setHtml(markdown);
     } else {
         document.setMarkdown(markdown);
@@ -873,10 +1143,7 @@ QString Backend::formattedMarkdown(const QString &markdown, const QString &accen
 QVariantList Backend::selectedHeadings() const {
     QVariantList headings;
     QTextDocument document;
-    const QString trimmed = m_selectedContent.trimmed();
-    if (trimmed.startsWith("<!DOCTYPE html", Qt::CaseInsensitive)
-        || trimmed.startsWith("<html", Qt::CaseInsensitive)
-        || trimmed.startsWith("<article", Qt::CaseInsensitive)) {
+    if (isHtmlContent(m_selectedContent)) {
         document.setHtml(m_selectedContent);
     } else {
         document.setMarkdown(m_selectedContent);
@@ -895,10 +1162,7 @@ QVariantList Backend::selectedHeadings() const {
 QVariantList Backend::selectedParagraphs() const {
     QVariantList paragraphs;
     QTextDocument document;
-    const QString trimmed = m_selectedContent.trimmed();
-    if (trimmed.startsWith("<!DOCTYPE html", Qt::CaseInsensitive)
-        || trimmed.startsWith("<html", Qt::CaseInsensitive)
-        || trimmed.startsWith("<article", Qt::CaseInsensitive)) {
+    if (isHtmlContent(m_selectedContent)) {
         document.setHtml(m_selectedContent);
     } else {
         document.setMarkdown(m_selectedContent);
@@ -937,6 +1201,13 @@ QVariantList Backend::resultRows(const QJsonDocument &document) {
             continue;
         const QJsonObject object = value.toObject();
         QVariantMap row;
+        QString documentId = object.value("id").toString();
+        if (documentId.isEmpty())
+            documentId = object.value("document_id").toString();
+        if (documentId.isEmpty())
+            documentId = object.value("documentId").toString();
+        if (!documentId.isEmpty())
+            row.insert("id", documentId);
         for (const QString key : {"id", "title", "author", "source", "site_name", "category", "location", "summary", "reading_time", "listening_time", "word_count", "url", "source_url", "first_opened_at", "published_date", "saved_at", "reading_progress", "image_url", "notes", "tags"}) {
             if (key == "tags") {
                 if (!object.value(key).isUndefined() && !object.value(key).isNull())
@@ -1030,16 +1301,22 @@ void Backend::finish(int exitCode, QProcess::ExitStatus exitStatus) {
 
     if (m_timedOut) {
         m_timedOut = false;
-        if (operation == Operation::Highlights)
+        if (operation == Operation::Highlights) {
             setMetadataBusy(false);
+            m_pendingHighlightEdit = PendingHighlightEdit::None;
+            m_dispatchingFreshHighlightEdit = false;
+        }
         setStatus(tr("Readwise request timed out"));
         fail(tr("The Readwise CLI did not respond before the timeout."));
         return;
     }
 
     if (exitStatus != QProcess::NormalExit || exitCode != 0) {
-        if (operation == Operation::Highlights)
+        if (operation == Operation::Highlights) {
             setMetadataBusy(false);
+            m_pendingHighlightEdit = PendingHighlightEdit::None;
+            m_dispatchingFreshHighlightEdit = false;
+        }
         setStatus(tr("Readwise request failed"));
         if (operation == Operation::Search && !m_localSearchMatches.isEmpty()) {
             m_documents = m_localSearchMatches;
@@ -1050,6 +1327,7 @@ void Backend::finish(int exitCode, QProcess::ExitStatus exitStatus) {
     }
 
     if (operation == Operation::Login) {
+        clearPersistentReaderCache();
         setStatus(tr("Login command finished · refreshing library"));
         refresh();
         return;
@@ -1066,6 +1344,7 @@ void Backend::finish(int exitCode, QProcess::ExitStatus exitStatus) {
         const QString detailId = m_pendingId;
         const QString content = QString::fromUtf8(standardOutput);
         m_contentCache.insert(detailId, content);
+        writePersistentArticle(detailId, content);
         if (m_selectedId != detailId)
             return;
         if (m_selectedTitle.isEmpty())
@@ -1080,6 +1359,7 @@ void Backend::finish(int exitCode, QProcess::ExitStatus exitStatus) {
         const QString detailId = m_pendingId;
         const QString content = jsonValue.toString();
         m_contentCache.insert(detailId, content);
+        writePersistentArticle(detailId, content);
         if (m_selectedId != detailId)
             return;
         if (m_selectedTitle.isEmpty())
@@ -1091,8 +1371,11 @@ void Backend::finish(int exitCode, QProcess::ExitStatus exitStatus) {
         return;
     }
     if (parseError.error != QJsonParseError::NoError) {
-        if (operation == Operation::Highlights)
+        if (operation == Operation::Highlights) {
             setMetadataBusy(false);
+            m_pendingHighlightEdit = PendingHighlightEdit::None;
+            m_dispatchingFreshHighlightEdit = false;
+        }
         setStatus(tr("Unexpected CLI response"));
         fail(tr("The Readwise CLI returned unrecognized data."));
         return;
@@ -1102,8 +1385,11 @@ void Backend::finish(int exitCode, QProcess::ExitStatus exitStatus) {
         const QJsonObject root = json.object();
         const QString error = root.value("error").toString();
         if (root.value("isError").toBool() || !error.isEmpty()) {
-            if (operation == Operation::Highlights)
+            if (operation == Operation::Highlights) {
                 setMetadataBusy(false);
+                m_pendingHighlightEdit = PendingHighlightEdit::None;
+                m_dispatchingFreshHighlightEdit = false;
+            }
             setStatus(tr("Readwise request failed"));
             fail(error.isEmpty() ? tr("The Readwise CLI returned an error.") : error);
             return;
@@ -1155,6 +1441,7 @@ void Backend::finish(int exitCode, QProcess::ExitStatus exitStatus) {
         }
         if (previousCursor != m_nextCursor)
             emit hasMoreDocumentsChanged();
+        writePersistentLibrary(m_location);
         emit documentsChanged();
         setStatus(tr("%1 documents").arg(m_documents.size()));
         if (m_documents.isEmpty())
@@ -1263,6 +1550,8 @@ void Backend::finish(int exitCode, QProcess::ExitStatus exitStatus) {
         if (content.isEmpty())
             content = tr("The CLI returned document metadata without a Markdown body.");
         m_contentCache.insert(detailId, content);
+        if (!content.isEmpty() && !content.startsWith(tr("The CLI returned document metadata without a Markdown body.")))
+            writePersistentArticle(detailId, content);
         m_selectedContent = content;
         emit selectedDocumentChanged();
         setStatus(tr("Document opened"));
@@ -1275,6 +1564,8 @@ void Backend::finish(int exitCode, QProcess::ExitStatus exitStatus) {
         const QVariantList fetched = highlightRows(json);
         m_highlightsCache.insert(highlightsId, fetched);
         m_highlightsLoaded.insert(highlightsId);
+        m_dispatchingFreshHighlightEdit = m_pendingHighlightEdit != PendingHighlightEdit::None
+            && m_pendingId == highlightsId;
         if (m_selectedId == highlightsId) {
             m_selectedHighlights = fetched;
             emit selectedHighlightsChanged();
@@ -1285,10 +1576,12 @@ void Backend::finish(int exitCode, QProcess::ExitStatus exitStatus) {
         break;
         }
     case Operation::Archive:
+        QFile::remove(persistentLibraryCachePath(m_location));
         setStatus(tr("Document archived"));
         refresh();
         break;
     case Operation::Move:
+        QFile::remove(persistentLibraryCachePath(m_location));
         updateDocumentRows("location", m_pendingLocation);
         setStatus(tr("Document moved to %1").arg(m_pendingLocation));
         m_pendingId.clear();

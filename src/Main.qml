@@ -252,6 +252,7 @@ ApplicationWindow {
         else if (command === "login") backend.login()
         else if (command === "connectApi") apiTokenDialog.open()
         else if (command === "forgetApi") backend.forgetApiToken()
+        else if (command === "clearCache") backend.clearArticleCache()
         else if (command === "back") returnToLibrary()
     }
 
@@ -639,6 +640,14 @@ ApplicationWindow {
                         listItemSelected = true
                         documentList.forceActiveFocus()
                     }
+                    TapHandler {
+                        acceptedButtons: Qt.LeftButton
+                        onDoubleTapped: function(eventPoint, button) {
+                            documentList.currentIndex = documentDelegate.index
+                            selectedIndex = documentDelegate.index
+                            activateDocument(documentDelegate.index, documentDelegate.id)
+                        }
+                    }
                     Keys.onPressed: function(event) {
                         if ((!backend.busy || backend.metadataBusy) && (event.key === Qt.Key_Return || event.key === Qt.Key_Enter)) {
                             openSelected()
@@ -784,20 +793,18 @@ ApplicationWindow {
                         id: articleFlickable
                         anchors.fill: parent
                         contentWidth: width
-                        contentHeight: articleText.height
+                        contentHeight: Math.max(articleText.y + articleText.height + 24, height)
                         clip: true
                         boundsBehavior: Flickable.StopAtBounds
-                        TextArea { Material.roundedScale: Material.NotRounded;
+                        TextEdit {
                             id: articleText
                             objectName: "articleText"
-                    text: backend.busy && backend.selectedContent.length === 0 ? qsTr("Loading document…") : backend.formattedMarkdown(backend.selectedContent, theme.accent)
+                            text: backend.busy && backend.selectedContent.length === 0 ? qsTr("Loading document…") : backend.formattedMarkdown(backend.selectedContent, theme.accent)
                             textFormat: TextEdit.RichText
-                            width: Math.min(articleScroll.width, 760)
-                            x: Math.max(0, (articleScroll.width - width) / 2)
-                            height: Math.max(contentHeight + topPadding + bottomPadding, articleScroll.height)
-                            padding: 0
-                            topPadding: 24
-                            bottomPadding: 24
+                            width: Math.min(articleFlickable.width, 760)
+                            x: Math.max(0, (articleFlickable.width - width) / 2)
+                            y: 24
+                            height: Math.max(contentHeight, articleFlickable.height - 48)
                             readOnly: true
                             selectByMouse: true
                             activeFocusOnTab: true
@@ -814,7 +821,6 @@ ApplicationWindow {
                             selectionColor: theme.accent
                             selectedTextColor: theme.accentForeground
                             font.family: theme.uiFont; font.pixelSize: 17
-                            background: null
                             Keys.onPressed: function(event) {
                                 if ((event.key === Qt.Key_Left || event.key === Qt.Key_Right)
                                     && (event.modifiers & Qt.ShiftModifier)) {
@@ -829,19 +835,6 @@ ApplicationWindow {
                                     keyboardSelectionCursor = -1
                                 }
                             }
-                        }
-                    }
-                    Rectangle {
-                        anchors.fill: parent
-                        visible: backend.busy && !backend.metadataBusy
-                        color: "#d917191d"
-                        z: 2
-                        BusyIndicator {
-                            anchors.centerIn: parent
-                            width: 76
-                            height: 76
-                        running: backend.busy && !backend.metadataBusy
-                            palette.highlight: theme.accent
                         }
                     }
                     Connections {
@@ -1284,6 +1277,7 @@ ApplicationWindow {
                     { label: qsTr("Connect direct Readwise API"), key: "connectApi" },
                     { label: qsTr("Sign in to Readwise CLI"), key: "login" },
                     { label: qsTr("Forget saved API token"), key: "forgetApi", enabled: backend.apiTokenAvailable && !backend.busy },
+                    { label: qsTr("Clear cached article content"), key: "clearCache" },
                     { label: qsTr("Keyboard shortcuts"), key: "help" },
                     { label: qsTr("Back to library"), key: "back" }
                 ]

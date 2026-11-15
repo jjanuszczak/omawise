@@ -1,0 +1,167 @@
+<section id="reader-latency-comparison" class="reader-latency" aria-labelledby="reader-latency-title">
+  <style>
+    #reader-latency-comparison {
+      color: var(--foreground);
+      font-family: inherit;
+      display: grid;
+      gap: calc(var(--font-size-base) * 1);
+      min-width: 0;
+    }
+    #reader-latency-comparison h1,
+    #reader-latency-comparison p { margin: 0; }
+    #reader-latency-comparison h1 { font-weight: 500; }
+    #reader-latency-comparison .intro,
+    #reader-latency-comparison .footnote { color: var(--muted-foreground); }
+    #reader-latency-comparison .intro { margin-top: calc(var(--font-size-base) * 0.5); }
+    #reader-latency-comparison .legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: calc(var(--font-size-base) * 1.25);
+      align-items: center;
+    }
+    #reader-latency-comparison .legend-item {
+      display: inline-flex;
+      align-items: center;
+      gap: calc(var(--font-size-base) * 0.4);
+    }
+    #reader-latency-comparison .swatch {
+      width: 0.8em;
+      height: 0.8em;
+      border-radius: 50%;
+      background: var(--series-color);
+      flex: none;
+    }
+    #reader-latency-comparison .measure-group {
+      display: grid;
+      gap: calc(var(--font-size-base) * 0.5);
+    }
+    #reader-latency-comparison h2 { margin: 0; font-weight: 500; }
+    #reader-latency-comparison .axis,
+    #reader-latency-comparison .latency-row {
+      display: grid;
+      grid-template-columns: minmax(5.5em, 0.8fr) minmax(6em, 1.5fr) minmax(4.7em, auto);
+      gap: calc(var(--font-size-base) * 0.5);
+      align-items: center;
+    }
+    #reader-latency-comparison .axis { color: var(--muted-foreground); }
+    #reader-latency-comparison .axis-plot,
+    #reader-latency-comparison .track {
+      position: relative;
+      min-width: 0;
+    }
+    #reader-latency-comparison .axis-plot { height: 1.4em; }
+    #reader-latency-comparison .tick {
+      position: absolute;
+      transform: translateX(-50%);
+      white-space: nowrap;
+    }
+    #reader-latency-comparison .tick:first-child {
+      left: 0 !important;
+      transform: none;
+    }
+    #reader-latency-comparison .tick:last-child {
+      transform: translateX(-100%);
+    }
+    #reader-latency-comparison .track {
+      height: 0.9em;
+      background: var(--muted);
+      border-radius: 999px;
+      overflow: hidden;
+    }
+    #reader-latency-comparison .fill {
+      height: 100%;
+      width: var(--extent);
+      background: var(--series-color);
+      border-radius: inherit;
+    }
+    #reader-latency-comparison .system,
+    #reader-latency-comparison .value { white-space: nowrap; }
+    #reader-latency-comparison .value { font-variant-numeric: tabular-nums; }
+    #reader-latency-comparison .footnote { max-width: 72ch; }
+    #reader-latency-comparison hr { margin: 0; }
+    @media (max-width: 480px) {
+      #reader-latency-comparison .axis,
+      #reader-latency-comparison .latency-row {
+        grid-template-columns: minmax(4.5em, 0.7fr) minmax(4em, 1fr) minmax(4.5em, auto);
+        gap: calc(var(--font-size-base) * 0.35);
+      }
+      #reader-latency-comparison .tick:first-child,
+      #reader-latency-comparison .tick:last-child { display: none; }
+    }
+  </style>
+
+  <header>
+    <h1 id="reader-latency-title">Reader latency: network vs cache-first</h1>
+    <p class="intro">Median time to list or article data · milliseconds on a logarithmic scale</p>
+  </header>
+
+  <div class="legend" aria-label="Compared paths">
+    <span class="legend-item"><span class="swatch" style="--series-color:var(--viz-series-1)" aria-hidden="true"></span>Readwise CLI</span>
+    <span class="legend-item"><span class="swatch" style="--series-color:var(--viz-series-2)" aria-hidden="true"></span>Direct API</span>
+    <span class="legend-item"><span class="swatch" style="--series-color:var(--viz-series-3)" aria-hidden="true"></span>API + caching</span>
+  </div>
+
+  <div role="img" aria-label="Logarithmic comparison of median latency. Inbox list: CLI 2238.5 milliseconds, API 748 milliseconds, API with caching 71 milliseconds. Article detail or cached open: CLI 1924.6 milliseconds, API 446 milliseconds, API with caching 15 milliseconds.">
+    <section class="measure-group" aria-labelledby="list-heading">
+      <h2 id="list-heading">Inbox list · 50 documents</h2>
+      <div class="axis text-small" aria-hidden="true">
+        <span></span>
+        <div class="axis-plot">
+          <span class="tick" style="left:0%">10 ms</span>
+          <span class="tick" style="left:38.8%">100 ms</span>
+          <span class="tick" style="left:79.1%">1 s</span>
+          <span class="tick" style="left:100%">3 s</span>
+        </div>
+        <span></span>
+      </div>
+      <div class="latency-row">
+        <span class="system">Readwise CLI</span>
+        <div class="track" aria-hidden="true"><div class="fill" style="--extent:94.9%;--series-color:var(--viz-series-1)"></div></div>
+        <span class="value">2,238.5 ms</span>
+      </div>
+      <div class="latency-row">
+        <span class="system">Direct API</span>
+        <div class="track" aria-hidden="true"><div class="fill" style="--extent:75.6%;--series-color:var(--viz-series-2)"></div></div>
+        <span class="value">748 ms</span>
+      </div>
+      <div class="latency-row">
+        <span class="system">API + caching</span>
+        <div class="track" aria-hidden="true"><div class="fill" style="--extent:34.4%;--series-color:var(--viz-series-3)"></div></div>
+        <span class="value">71 ms</span>
+      </div>
+    </section>
+
+    <hr>
+
+    <section class="measure-group" aria-labelledby="article-heading">
+      <h2 id="article-heading">Article detail / open</h2>
+      <div class="axis text-small" aria-hidden="true">
+        <span></span>
+        <div class="axis-plot">
+          <span class="tick" style="left:0%">10 ms</span>
+          <span class="tick" style="left:38.8%">100 ms</span>
+          <span class="tick" style="left:79.1%">1 s</span>
+          <span class="tick" style="left:100%">3 s</span>
+        </div>
+        <span></span>
+      </div>
+      <div class="latency-row">
+        <span class="system">Readwise CLI</span>
+        <div class="track" aria-hidden="true"><div class="fill" style="--extent:92.7%;--series-color:var(--viz-series-1)"></div></div>
+        <span class="value">1,924.6 ms</span>
+      </div>
+      <div class="latency-row">
+        <span class="system">Direct API</span>
+        <div class="track" aria-hidden="true"><div class="fill" style="--extent:66.6%;--series-color:var(--viz-series-2)"></div></div>
+        <span class="value">446 ms</span>
+      </div>
+      <div class="latency-row">
+        <span class="system">API + caching</span>
+        <div class="track" aria-hidden="true"><div class="fill" style="--extent:7.1%;--series-color:var(--viz-series-3)"></div></div>
+        <span class="value">15 ms</span>
+      </div>
+    </section>
+  </div>
+
+  <p class="footnote text-small">CLI values: 7 runs, command-to-response. API values: 5-run direct authenticated request medians. API + caching: 21 offscreen runs to first usable frame from cached data; the background refresh used a fake CLI, so this is cache display time, not server-sync completion. API and CLI p95 are not shown.</p>
+</section>
