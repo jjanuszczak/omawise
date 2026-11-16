@@ -78,6 +78,9 @@ public:
                                     const QStringList &tags = {}, const QString &note = {});
     Q_INVOKABLE void archiveDocument(const QString &id);
     Q_INVOKABLE void moveDocument(const QString &id, const QString &location);
+    Q_INVOKABLE void saveUrl(const QString &url);
+    Q_INVOKABLE void setDocumentSeen(const QString &id, bool seen);
+    Q_INVOKABLE void saveReadingProgress(const QString &id, int progress);
     Q_INVOKABLE void saveDocumentNote(const QString &id, const QString &note);
     Q_INVOKABLE void saveDocumentTags(const QString &id, const QStringList &tags);
     Q_INVOKABLE void loadDocumentTags();
@@ -111,7 +114,7 @@ signals:
     void locationChanged();
 
 private:
-    enum class Operation { None, List, ListMore, Search, TitleSearch, Detail, ApiDetail, ValidateApiToken, Highlights, Archive, Move, SaveNote, SaveTags, CreateHighlight, SaveHighlightNote, AddHighlightTags, RemoveHighlightTags, Login };
+    enum class Operation { None, List, ListMore, Search, TitleSearch, Detail, ApiDetail, ValidateApiToken, Highlights, Archive, Move, SaveUrl, SetSeen, SaveProgress, SaveNote, SaveTags, CreateHighlight, SaveHighlightNote, AddHighlightTags, RemoveHighlightTags, Login };
     enum class PendingHighlightEdit { None, SaveNote, AddTags, RemoveTags };
     void run(const QStringList &arguments, Operation operation);
     void runApiGet(const QUrl &url, Operation operation, const QString &token = {});
@@ -127,7 +130,7 @@ private:
     void setBusy(bool busy);
     void setMetadataBusy(bool busy);
     void setStatus(const QString &status);
-    void updateDocumentRows(const QString &key, const QVariant &value);
+    void updateDocumentRows(const QString &key, const QVariant &value, const QString &id = {});
     void processQueuedWork();
     bool refreshHighlightsBeforeEdit(const QString &documentId, const QString &highlightId,
                                      PendingHighlightEdit edit, const QString &note = {},
@@ -179,6 +182,9 @@ private:
     QString m_activeQuery;
     QString m_nextCursor;
     QString m_pendingId;
+    QString m_pendingUrl;
+    bool m_pendingSeen = false;
+    int m_pendingProgress = 0;
     QString m_queuedHighlightId;
     bool m_hasQueuedOpen = false;
     bool m_documentTagsLoaded = false;

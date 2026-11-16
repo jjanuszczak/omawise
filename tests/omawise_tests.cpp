@@ -550,11 +550,30 @@ void BackendTests::qmlSearchActivationAndReaderSelection() {
     QVERIFY(apiDialog);
     QVERIFY(apiTokenField);
     QVERIFY(apiDialog->property("visible").toBool());
+    QTest::qWait(120);
+    QVERIFY(window->grabWindow().save(QStringLiteral("/tmp/omawise-api-token-dialog.png")));
     QCOMPARE(apiTokenField->property("echoMode").toInt(), 2);
     apiTokenField->setProperty("text", QStringLiteral("discard-this-test-value"));
     QVERIFY(QMetaObject::invokeMethod(apiDialog, "close"));
     QTRY_VERIFY(!apiDialog->property("visible").toBool());
     QVERIFY(apiTokenField->property("text").toString().isEmpty());
+
+    QObject *saveUrlButton = window->findChild<QObject *>(QStringLiteral("saveUrlButton"));
+    QVERIFY(saveUrlButton);
+    QVERIFY(QMetaObject::invokeMethod(saveUrlButton, "clicked"));
+    QObject *saveUrlDialog = window->findChild<QObject *>(QStringLiteral("saveUrlDialog"));
+    QVERIFY(saveUrlDialog);
+    QVERIFY(saveUrlDialog->property("visible").toBool());
+    QTest::qWait(120);
+    QVERIFY(window->grabWindow().save(QStringLiteral("/tmp/omawise-save-url-dialog.png")));
+    QVERIFY(QMetaObject::invokeMethod(saveUrlDialog, "close"));
+    QTRY_VERIFY(!saveUrlDialog->property("visible").toBool());
+
+    QObject *root = engine.rootObjects().first();
+    root->setProperty("showPalette", true);
+    QTest::qWait(120);
+    QVERIFY(window->grabWindow().save(QStringLiteral("/tmp/omawise-command-palette-dialog.png")));
+    root->setProperty("showPalette", false);
 
     QVERIFY(QMetaObject::invokeMethod(search, "forceActiveFocus"));
     search->setProperty("text", QStringLiteral("Remote"));
@@ -588,6 +607,8 @@ void BackendTests::qmlSearchActivationAndReaderSelection() {
     QObject *appearanceDialog = window->findChild<QObject *>(QStringLiteral("readerAppearanceDialog"));
     QVERIFY(appearanceDialog);
     QVERIFY(appearanceDialog->property("visible").toBool());
+    QTest::qWait(120);
+    QVERIFY(window->grabWindow().save(QStringLiteral("/tmp/omawise-reader-appearance-dialog.png")));
     QVERIFY(window->findChild<QObject *>(QStringLiteral("readerFontFamilyPicker")));
     QVERIFY(window->findChild<QObject *>(QStringLiteral("readerFontSizePicker")));
     QVERIFY(window->findChild<QObject *>(QStringLiteral("readerLineSpacingPicker")));

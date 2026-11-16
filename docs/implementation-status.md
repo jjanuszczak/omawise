@@ -9,6 +9,7 @@
 - Article formatting is configurable through `~/.config/omawise/reader.toml`, with live reload and bounded fallback values. The `Aa` reader appearance dialog has pickers for article typeface, text size, line spacing, paragraph spacing, and content width; changes are atomically written to TOML and applied while the app runs. Defaults are 12 px text, 1.2 line spacing, and 18 pt between paragraphs, retaining Omawise's current dark colors, Omarchy accent links, and monospace typeface. The 760 px reading column remains configurable.
 - The Arch package includes a TOML example and the `omawise-reader-settings` agent skill under `/usr/share/omawise/`.
 - The article toolbar uses compact Inbox/Later/Archive icons that move the selected article, an `Aa` appearance editor, and an overflow menu with **Copy Markdown** (including YAML frontmatter), highlight, and **Open in Reader** actions.
+- The command palette can save HTTP/HTTPS URLs to Reader through `reader-create-document`; the Info pane and palette can mark a selected document seen/unseen. Reading progress is saved as Omawise's furthest-scroll percentage after forward scrolling and displayed in the library and Info pane. This approximates Reader's reading progress; Reader does not support PDF progress.
 
 - Native C++/Qt Quick application target `omawise`, built with qmake (`omawise.pro`); the Arch package and desktop application are also named Omawise.
 - `src/backend.{h,cpp}` invokes the official Readwise CLI asynchronously using `QProcess` argument arrays; it does not shell out or pass CLI credentials.
@@ -68,7 +69,7 @@ Do not issue account calls during routine development; use a fake `readwise` exe
 
 ## Verification already performed
 
-- The app compiles with the available Qt 6.12 toolchain. The full offscreen suite reports 19 Qt Test passes including setup and cleanup.
+- The app compiles with the available Qt 6.12 toolchain. The full offscreen suite reports 20 Qt Test passes including setup and cleanup. List-row progress and seen fields are normalized for older cached entries so the QML delegate always initializes.
 - The repository's QML interaction test uses a fake CLI and verifies search submission, keyboard document activation, the Open action, article focus and paragraph/word selection, highlight creation through the shortcut and toolbar, inline document note/tag editing, API token dialog masking/clearing, and highlight refresh after creation. Coverage includes retained paragraph margins after Markdown conversion, reader settings defaults, live TOML reload and value bounds; persistent cache load/clear/expiry; cached library load; failed-refresh fallback; file permissions; title-search `document_id` normalization; highlight refresh before edits; and cache-backed QML frame timings.
 - `bin/test` sets `QT_QPA_PLATFORM=offscreen` and `QT_QPA_PLATFORMTHEME=generic` so GUI checks do not depend on the host desktop session.
 - The CLI sign-in prompt is hidden normally and appears only when CLI error text indicates an authentication failure; it launches the official CLI OAuth flow when selected. The app does not inspect CLI credential files. The separate API token flow stores its token in Secret Service.
@@ -93,7 +94,7 @@ Do not issue account calls during routine development; use a fake `readwise` exe
 1. Confirm the offscreen cached-action and startup p50/p95 on Omarchy hardware.
 2. Measure direct API p95 with the keyring-backed app when connected; the existing API account comparison recorded five-run medians only. CLI list/detail p50/p95 are now recorded above.
 3. Continue routine development with fake CLI fixtures. The title-search parser, persistent cache lifecycle, refresh fallback, expiry, clear, and highlight preflight now have regression coverage.
-4. Consider explicit URL capture, seen/reading-progress controls, offline reading, settings and shortcut customization, and dedicated PDF/EPUB viewers as future work. Keep PDF/EPUB anchoring, TTS, Ghostreader, and complete Reader parity out of current claims.
+4. Consider offline reading, settings and shortcut customization, and dedicated PDF/EPUB viewers as future work. Keep PDF/EPUB anchoring, TTS, Ghostreader, and complete Reader parity out of current claims.
 
 ## Contributor instructions
 
