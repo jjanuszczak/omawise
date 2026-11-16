@@ -30,11 +30,17 @@ ApplicationWindow {
     property int keyboardSelectionCursor: -1
     property bool keyboardSelecting: false
     property bool refocusDocumentTagEditorAfterSave: false
+    property int highestReadingProgress: 0
+    property int lastSavedReadingProgress: 0
 
     function selectedDocument() {
         if (selectedIndex < 0 || selectedIndex >= backend.documents.length)
             return ({})
         return backend.documents[selectedIndex]
+    }
+
+    function documentIsSeen(doc) {
+        return doc.seen === undefined ? !!doc.first_opened_at : Boolean(doc.seen)
     }
 
     function documentTags(doc) {
@@ -121,6 +127,8 @@ ApplicationWindow {
     function openSelected() {
         const doc = selectedDocument()
         if (doc.id) {
+            highestReadingProgress = Math.max(0, Number(doc.reading_progress) || 0)
+            lastSavedReadingProgress = highestReadingProgress
             articleFlickable.contentY = 0
             reading = true
             backend.openDocument(doc.id, doc.title || "", doc.author || "", doc.url || "", documentTags(doc), doc.notes || "")
@@ -133,6 +141,8 @@ ApplicationWindow {
         articleFlickable.contentY = 0
         reading = true
         const doc = selectedDocument()
+        highestReadingProgress = Math.max(0, Number(doc.reading_progress) || 0)
+        lastSavedReadingProgress = highestReadingProgress
         backend.openDocument(id, doc.title || "", doc.author || "", doc.url || "", documentTags(doc), doc.notes || "")
     }
 
@@ -142,11 +152,29 @@ ApplicationWindow {
     }
 
     function returnToLibrary() {
+        saveCurrentProgress()
         const movedFromCurrentView = documentLocation() !== backend.location
         reading = false
         if (movedFromCurrentView)
             backend.refresh()
         Qt.callLater(function() { documentList.forceActiveFocus() })
+    }
+
+    function saveCurrentProgress() {
+        const id = selectedDocument().id || ""
+        if (!id || !backend.selectedContent)
+            return
+        const range = Math.max(1, articleFlickable.contentHeight - articleFlickable.height)
+        const current = Math.min(100, Math.max(0, Math.round(articleFlickable.contentY / range * 100)))
+        highestReadingProgress = Math.max(highestReadingProgress, current)
+        if (highestReadingProgress > lastSavedReadingProgress) {
+            if (backend.busy) {
+                progressSaveTimer.restart()
+                return
+            }
+            lastSavedReadingProgress = highestReadingProgress
+            backend.saveReadingProgress(id, highestReadingProgress)
+        }
     }
 
     function scrollToHeading(position) {
@@ -293,6 +321,11 @@ ApplicationWindow {
         else if (command === "connectApi") apiTokenDialog.open()
         else if (command === "forgetApi") backend.forgetApiToken()
         else if (command === "clearCache") backend.clearArticleCache()
+        else if (command === "saveUrl") saveUrlDialog.open()
+        else if (command === "toggleSeen") {
+            const doc = selectedDocument()
+            if (doc.id) backend.setDocumentSeen(doc.id, !Boolean(doc.seen))
+        }
         else if (command === "back") returnToLibrary()
     }
 
@@ -425,6 +458,23 @@ ApplicationWindow {
                     spacing: 10
                     Image { source: "qrc:/assets/omawise-mark.svg"; sourceSize.width: 36; sourceSize.height: 36; width: 36; height: 36; smooth: false }
                     Text { text: qsTr("Omawise"); color: "#f0f1ed"; font.family: theme.uiFont; font.pixelSize: 18; font.weight: Font.DemiBold }
+                    Item { Layout.fillWidth: true }
+                    ToolButton {
+                        objectName: "saveUrlButton"
+                        visible: !reading
+                        enabled: !backend.busy
+                        implicitWidth: 32
+                        implicitHeight: 32
+                        padding: 0
+                        text: "＋"
+                        font.family: theme.uiFont
+                        font.pixelSize: 22
+                        Accessible.name: qsTr("Save URL to Reader")
+                        ToolTip.visible: hovered
+                        ToolTip.text: qsTr("Save URL to Reader")
+                        background: Rectangle { color: parent.hovered ? "#343940" : "transparent"; radius: 0 }
+                        onClicked: saveUrlDialog.open()
+                    }
                 }
                 TextField { Material.roundedScale: Material.NotRounded; font.family: theme.uiFont;
                     id: searchField
@@ -679,6 +729,8 @@ ApplicationWindow {
                     required property string reading_time
                     required property string listening_time
                     required property string first_opened_at
+                    required property var reading_progress
+                    required property var seen
                     width: ListView.view.width
                     height: 112
                     padding: 0
@@ -697,7 +749,13 @@ ApplicationWindow {
                             Layout.fillWidth: true
                             Text { text: category.toUpperCase(); color: theme.accent; font.family: theme.uiFont; font.pixelSize: 9; font.bold: true }
                             Text { text: reading_time || listening_time; color: "#858a83"; font.family: theme.uiFont; font.pixelSize: 10; Layout.fillWidth: true }
-                            Text { text: first_opened_at ? "" : qsTr("UNREAD"); color: "#abb0a4"; font.family: theme.uiFont; font.pixelSize: 8 }
+                            Text { text: (seen === undefined ? !first_opened_at : !Boolean(seen)) ? qsTr("UNSEEN") : ""; color: "#abb0a4"; font.family: theme.uiFont; font.pixelSize: 8 }
+                        }
+                        Rectangle {
+                            Layout.fillWidth: true
+                            height: 2
+                            color: "#3b3e43"
+                            Rectangle { width: parent.width * Math.max(0, Math.min(100, Number(reading_progress) || 0)) / 100; height: parent.height; color: theme.accent }
                         }
                     }
                     onClicked: {
@@ -881,6 +939,7 @@ ApplicationWindow {
                         contentHeight: Math.max(articleText.y + articleText.height + 24, height)
                         clip: true
                         boundsBehavior: Flickable.StopAtBounds
+                        onContentYChanged: progressSaveTimer.restart()
                         TextEdit {
                             id: articleText
                             objectName: "articleText"
@@ -919,6 +978,26 @@ ApplicationWindow {
                                     keyboardSelectionAnchor = -1
                                     keyboardSelectionCursor = -1
                                 }
+                            }
+                        }
+                    }
+                    Timer {
+                        id: progressSaveTimer
+                        interval: 1200
+                        repeat: false
+                        onTriggered: {
+                            const range = Math.max(1, articleFlickable.contentHeight - articleFlickable.height)
+                            const current = Math.min(100, Math.max(0, Math.round(articleFlickable.contentY / range * 100)))
+                            const next = Math.max(highestReadingProgress, current)
+                            const shouldSave = reading
+                                ? next >= lastSavedReadingProgress + 5
+                                : next > lastSavedReadingProgress
+                            if (shouldSave && !backend.busy) {
+                                highestReadingProgress = next
+                                lastSavedReadingProgress = next
+                                backend.saveReadingProgress(selectedDocument().id || "", next)
+                            } else if (shouldSave && backend.busy) {
+                                restart()
                             }
                         }
                     }
@@ -1000,6 +1079,16 @@ ApplicationWindow {
                             Text { text: selectedDocument().location || backend.location; color: "#d2d5ce"; font.family: theme.uiFont; font.pixelSize: 10; wrapMode: Text.Wrap; Layout.fillWidth: true }
                             Text { text: qsTr("Reading time"); color: "#8d928a"; font.family: theme.uiFont; font.pixelSize: 10 }
                             Text { text: selectedDocument().reading_time || selectedDocument().listening_time || "—"; color: "#d2d5ce"; font.family: theme.uiFont; font.pixelSize: 10; wrapMode: Text.Wrap; Layout.fillWidth: true }
+                            Text { text: qsTr("Reading progress"); color: "#8d928a"; font.family: theme.uiFont; font.pixelSize: 10 }
+                            Text { text: Math.round(Number(selectedDocument().reading_progress) || 0) + "%"; color: "#d2d5ce"; font.family: theme.uiFont; font.pixelSize: 10; Layout.fillWidth: true }
+                        }
+                        Button {
+                            Layout.fillWidth: true
+                            text: documentIsSeen(selectedDocument()) ? qsTr("Mark unseen") : qsTr("Mark seen")
+                            enabled: !!selectedDocument().id && !backend.busy
+                            font.family: theme.uiFont
+                            Material.roundedScale: Material.NotRounded
+                            onClicked: backend.setDocumentSeen(selectedDocument().id || "", !documentIsSeen(selectedDocument()))
                         }
                         Rectangle { Layout.fillWidth: true; height: 1; color: "#34373c" }
                         Text { text: qsTr("TAGS"); color: "#91968e"; font.family: theme.uiFont; font.pixelSize: 10; font.bold: true; Layout.fillWidth: true }
@@ -1300,15 +1389,21 @@ ApplicationWindow {
         title: qsTr("Reader appearance")
         modal: true
         anchors.centerIn: Overlay.overlay
-        width: 500
-        height: 520
+        width: Math.min(560, window.width - 48)
+        height: Math.min(480, window.height - 48)
+        padding: 16
         standardButtons: Dialog.NoButton
         background: Rectangle {
             color: "#25282e"
             border.color: "#3a3d43"
         }
-        contentItem: ColumnLayout {
-            spacing: 16
+        contentItem: ScrollView {
+            clip: true
+            ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
+            ScrollBar.vertical.policy: ScrollBar.AsNeeded
+            ColumnLayout {
+            width: appearanceDialog.availableWidth
+            spacing: 14
             Label {
                 Layout.fillWidth: true
                 wrapMode: Text.Wrap
@@ -1318,37 +1413,43 @@ ApplicationWindow {
             }
             GridLayout {
                 columns: 2
-                columnSpacing: 18
-                rowSpacing: 14
+                columnSpacing: 14
+                rowSpacing: 10
                 Layout.fillWidth: true
-                Label { text: qsTr("Font family"); font.family: theme.uiFont }
+                Label { text: qsTr("Font family"); font.family: theme.uiFont; Layout.minimumWidth: 120; wrapMode: Text.Wrap }
                 ComboBox {
                     id: readerFontFamilyPicker
                     objectName: "readerFontFamilyPicker"
                     Material.roundedScale: Material.NotRounded
                     Layout.fillWidth: true
+                    Layout.minimumWidth: 220
+                    Layout.preferredHeight: 44
                     editable: true
                     model: ["monospace", "sans-serif", "serif", "Atkinson Hyperlegible", "Inter", "Noto Sans", "Noto Serif"]
                     editText: theme.readerStyle.fontFamily
                     onActivated: updateReaderStyle("fontFamily", currentText)
                     onAccepted: updateReaderStyle("fontFamily", editText)
                 }
-                Label { text: qsTr("Font size"); font.family: theme.uiFont }
+                Label { text: qsTr("Font size"); font.family: theme.uiFont; Layout.minimumWidth: 120 }
                 SpinBox {
                     objectName: "readerFontSizePicker"
                     Material.roundedScale: Material.NotRounded
                     Layout.fillWidth: true
+                    Layout.minimumWidth: 150
+                    Layout.preferredHeight: 44
                     from: 12
                     to: 48
                     value: theme.readerStyle.fontSizePx
                     editable: true
                     onValueModified: updateReaderStyle("fontSizePx", value)
                 }
-                Label { text: qsTr("Line spacing"); font.family: theme.uiFont }
+                Label { text: qsTr("Line spacing"); font.family: theme.uiFont; Layout.minimumWidth: 120 }
                 SpinBox {
                     objectName: "readerLineSpacingPicker"
                     Material.roundedScale: Material.NotRounded
                     Layout.fillWidth: true
+                    Layout.minimumWidth: 150
+                    Layout.preferredHeight: 44
                     from: 10
                     to: 22
                     stepSize: 1
@@ -1358,22 +1459,26 @@ ApplicationWindow {
                     valueFromText: function(text, locale) { return Math.round(Number.fromLocaleString(locale, text) * 10) }
                     onValueModified: updateReaderStyle("lineSpacing", value / 10)
                 }
-                Label { text: qsTr("Paragraph spacing"); font.family: theme.uiFont }
+                Label { text: qsTr("Paragraph spacing"); font.family: theme.uiFont; Layout.minimumWidth: 120; wrapMode: Text.Wrap }
                 SpinBox {
                     objectName: "readerParagraphSpacingPicker"
                     Material.roundedScale: Material.NotRounded
                     Layout.fillWidth: true
+                    Layout.minimumWidth: 150
+                    Layout.preferredHeight: 44
                     from: 0
                     to: 36
                     value: theme.readerStyle.paragraphSpacingPt
                     editable: true
                     onValueModified: updateReaderStyle("paragraphSpacingPt", value)
                 }
-                Label { text: qsTr("Content width"); font.family: theme.uiFont }
+                Label { text: qsTr("Content width"); font.family: theme.uiFont; Layout.minimumWidth: 120; wrapMode: Text.Wrap }
                 SpinBox {
                     objectName: "readerContentWidthPicker"
                     Material.roundedScale: Material.NotRounded
                     Layout.fillWidth: true
+                    Layout.minimumWidth: 150
+                    Layout.preferredHeight: 44
                     from: 480
                     to: 1200
                     stepSize: 20
@@ -1397,9 +1502,10 @@ ApplicationWindow {
                 wrapMode: Text.Wrap
                 Layout.fillWidth: true
             }
+            }
         }
         footer: Item {
-            implicitHeight: appearanceCloseButton.implicitHeight + 24
+            implicitHeight: 60
             RowLayout {
                 anchors.fill: parent
                 anchors.leftMargin: 16
@@ -1408,16 +1514,22 @@ ApplicationWindow {
                 anchors.bottomMargin: 12
                 spacing: 8
                 Button {
+                    Material.roundedScale: Material.NotRounded
                     text: qsTr("Reset defaults")
                     font.family: theme.uiFont
+                    Layout.minimumWidth: 128
+                    Layout.preferredHeight: 40
                     onClicked: resetReaderStyle()
                 }
                 Item { Layout.fillWidth: true }
                 Button {
                     id: appearanceCloseButton
                     objectName: "readerAppearanceCloseButton"
+                    Material.roundedScale: Material.NotRounded
                     text: qsTr("Close")
                     font.family: theme.uiFont
+                    Layout.minimumWidth: 96
+                    Layout.preferredHeight: 40
                     onClicked: appearanceDialog.close()
                 }
             }
@@ -1454,26 +1566,35 @@ ApplicationWindow {
         id: apiTokenDialog
         objectName: "apiTokenDialog"
         modal: true
-        anchors.centerIn: parent
-        width: 500
+        anchors.centerIn: Overlay.overlay
+        width: Math.min(560, window.width - 48)
+        padding: 18
         title: qsTr("Connect Readwise API")
         standardButtons: Dialog.NoButton
+        background: Rectangle { color: "#25282e"; border.color: "#3a3d43" }
         contentItem: ColumnLayout {
-            spacing: 10
+            spacing: 14
             Label {
                 text: qsTr("Paste a Readwise access token. Omawise validates it and stores it in your desktop keyring; it is never written to app settings or passed in command arguments.")
                 wrapMode: Text.Wrap
                 Layout.fillWidth: true
+                color: "#c5c8c1"
+                font.family: theme.uiFont
             }
             Button {
                 text: qsTr("Get an access token from Readwise")
+                Material.roundedScale: Material.NotRounded
                 font.family: theme.uiFont
+                Layout.minimumHeight: 40
                 onClicked: backend.openExternalUrl("https://readwise.io/access_token")
             }
             TextField {
                 id: apiTokenField
                 objectName: "apiTokenField"
                 Layout.fillWidth: true
+                Layout.minimumHeight: 44
+                Material.roundedScale: Material.NotRounded
+                font.family: theme.uiFont
                 placeholderText: qsTr("Readwise access token")
                 echoMode: TextInput.Password
                 selectByMouse: true
@@ -1494,17 +1615,28 @@ ApplicationWindow {
             }
         }
         footer: RowLayout {
-            spacing: 8
+            spacing: 10
+            Layout.fillWidth: true
+            Layout.leftMargin: 14
+            Layout.rightMargin: 14
+            Layout.topMargin: 8
+            Layout.bottomMargin: 12
             Item { Layout.fillWidth: true }
             Button {
+                Material.roundedScale: Material.NotRounded
                 text: qsTr("Cancel")
                 font.family: theme.uiFont
+                Layout.minimumWidth: 96
+                Layout.preferredHeight: 40
                 enabled: !backend.apiLoginBusy
                 onClicked: { apiTokenField.clear(); apiTokenDialog.close() }
             }
             Button {
+                Material.roundedScale: Material.NotRounded
                 text: qsTr("Connect")
                 font.family: theme.uiFont
+                Layout.minimumWidth: 104
+                Layout.preferredHeight: 40
                 enabled: apiTokenField.text.trim().length > 0 && !backend.apiLoginBusy && !backend.busy
                 onClicked: backend.saveApiToken(apiTokenField.text)
             }
@@ -1519,14 +1651,19 @@ ApplicationWindow {
         x: (window.width - width) / 2
         y: 90
         width: 500
+        padding: 10
         title: qsTr("Command palette")
         standardButtons: Dialog.NoButton
+        background: Rectangle { color: "#25282e"; border.color: "#3a3d43" }
         contentItem: ColumnLayout {
+            spacing: 2
             Repeater {
                 model: [
                     { label: qsTr("Refresh current view"), key: "refresh" },
                     { label: qsTr("Open selected document"), key: "open" },
                     { label: qsTr("Archive selected document"), key: "archive" },
+                    { label: qsTr("Save URL to Reader"), key: "saveUrl", enabled: !backend.busy },
+                    { label: documentIsSeen(selectedDocument()) ? qsTr("Mark selected document unseen") : qsTr("Mark selected document seen"), key: "toggleSeen", enabled: !!selectedDocument().id && !backend.busy },
                     { label: qsTr("Connect direct Readwise API"), key: "connectApi" },
                     { label: qsTr("Sign in to Readwise CLI"), key: "login" },
                     { label: qsTr("Forget saved API token"), key: "forgetApi", enabled: backend.apiTokenAvailable && !backend.busy },
@@ -1537,12 +1674,72 @@ ApplicationWindow {
                 delegate: ItemDelegate { font.family: theme.uiFont;
                     required property var modelData
                     Layout.fillWidth: true
+                    implicitHeight: 42
+                    Material.roundedScale: Material.NotRounded
                     text: modelData.label
                     enabled: modelData.enabled !== false
                     onClicked: runCommand(modelData.key)
                 }
             }
         }
+    }
+
+    Dialog {
+        Material.roundedScale: Material.NotRounded
+        id: saveUrlDialog
+        objectName: "saveUrlDialog"
+        modal: true
+        anchors.centerIn: Overlay.overlay
+        width: Math.min(560, window.width - 48)
+        padding: 18
+        title: qsTr("Save URL to Reader")
+        standardButtons: Dialog.NoButton
+        background: Rectangle { color: "#25282e"; border.color: "#3a3d43" }
+        contentItem: ColumnLayout {
+            spacing: 14
+            TextField {
+                id: saveUrlField
+                objectName: "saveUrlField"
+                Layout.fillWidth: true
+                Layout.minimumHeight: 44
+                Material.roundedScale: Material.NotRounded
+                font.family: theme.uiFont
+                placeholderText: qsTr("https://example.com/article")
+                inputMethodHints: Qt.ImhUrlCharactersOnly
+                enabled: !backend.busy
+                onAccepted: if (!backend.busy) { backend.saveUrl(text); clear(); saveUrlDialog.close() }
+            }
+        }
+        footer: Item {
+            implicitHeight: 60
+            RowLayout {
+                anchors.fill: parent
+                anchors.leftMargin: 14
+                anchors.rightMargin: 14
+                anchors.topMargin: 8
+                anchors.bottomMargin: 12
+                spacing: 10
+                Item { Layout.fillWidth: true }
+                Button {
+                    Material.roundedScale: Material.NotRounded
+                    text: qsTr("Cancel")
+                    font.family: theme.uiFont
+                    Layout.minimumWidth: 96
+                    Layout.preferredHeight: 40
+                    onClicked: saveUrlDialog.close()
+                }
+                Button {
+                    Material.roundedScale: Material.NotRounded
+                    text: qsTr("Save")
+                    font.family: theme.uiFont
+                    Layout.minimumWidth: 96
+                    Layout.preferredHeight: 40
+                    enabled: saveUrlField.text.trim().length > 0 && !backend.busy
+                    onClicked: { backend.saveUrl(saveUrlField.text); saveUrlField.clear(); saveUrlDialog.close() }
+                }
+            }
+        }
+        onOpened: saveUrlField.forceActiveFocus()
     }
 
     Dialog { Material.roundedScale: Material.NotRounded;
@@ -1553,8 +1750,10 @@ ApplicationWindow {
         anchors.centerIn: Overlay.overlay
         width: Math.min(720, window.width - 48)
         height: Math.min(620, window.height - 72)
+        padding: 12
         title: qsTr("Keyboard shortcuts")
         standardButtons: Dialog.NoButton
+        background: Rectangle { color: "#25282e"; border.color: "#3a3d43" }
         onAccepted: showHelp = false
         contentItem: ScrollView {
             clip: true
@@ -1639,6 +1838,8 @@ ApplicationWindow {
                     font.family: theme.uiFont
                     text: qsTr("Close")
                     objectName: "helpCloseButton"
+                    Layout.minimumWidth: 96
+                    Layout.preferredHeight: 40
                     onClicked: helpDialog.accept()
                 }
             }

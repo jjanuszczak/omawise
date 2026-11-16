@@ -680,11 +680,12 @@ void Backend::setStatus(const QString &status) {
     emit statusChanged();
 }
 
-void Backend::updateDocumentRows(const QString &key, const QVariant &value) {
-    const auto update = [this, &key, &value](QVariantList &rows) {
+void Backend::updateDocumentRows(const QString &key, const QVariant &value, const QString &id) {
+    const QString targetId = id.isEmpty() ? m_selectedId : id;
+    const auto update = [&key, &value, &targetId](QVariantList &rows) {
         for (QVariant &rowValue : rows) {
             QVariantMap row = rowValue.toMap();
-            if (row.value("id").toString() != m_selectedId)
+            if (row.value("id").toString() != targetId)
                 continue;
             row.insert(key, value);
             rowValue = row;
@@ -919,6 +920,43 @@ void Backend::moveDocument(const QString &id, const QString &location) {
     m_pendingLocation = location;
     setStatus(tr("Moving document…"));
     run({"--json", "reader-move-documents", "--document-ids", id, "--location", location}, Operation::Move);
+}
+
+void Backend::saveUrl(const QString &value) {
+    const QUrl url = QUrl::fromUserInput(value.trimmed());
+    if (!url.isValid() || (url.scheme() != QStringLiteral("http") && url.scheme() != QStringLiteral("https"))
+        || url.host().isEmpty()) {
+        fail(tr("Enter a valid HTTP or HTTPS URL."));
+        return;
+    }
+    m_pendingUrl = url.toString(QUrl::FullyEncoded);
+    setStatus(tr("Saving URL to Reader…"));
+    run({"--json", "reader-create-document", "--url", m_pendingUrl}, Operation::SaveUrl);
+}
+
+void Backend::setDocumentSeen(const QString &id, bool seen) {
+    if (id.isEmpty())
+        return;
+    QJsonObject document{{"document_id", id}, {"seen", seen}};
+    QJsonArray documents{document};
+    m_pendingId = id;
+    m_pendingSeen = seen;
+    setStatus(seen ? tr("Marking document seen…") : tr("Marking document unseen…"));
+    run({"--json", "reader-bulk-edit-document-metadata", "--documents",
+         QString::fromUtf8(QJsonDocument(documents).toJson(QJsonDocument::Compact))}, Operation::SetSeen);
+}
+
+void Backend::saveReadingProgress(const QString &id, int progress) {
+    if (id.isEmpty())
+        return;
+    progress = qBound(0, progress, 100);
+    QJsonObject document{{"document_id", id}, {"reading_progress", progress}};
+    QJsonArray documents{document};
+    m_pendingId = id;
+    m_pendingProgress = progress;
+    setStatus(tr("Saving reading progress…"));
+    run({"--json", "reader-bulk-edit-document-metadata", "--documents",
+         QString::fromUtf8(QJsonDocument(documents).toJson(QJsonDocument::Compact))}, Operation::SaveProgress);
 }
 
 void Backend::saveDocumentNote(const QString &id, const QString &note) {
@@ -1352,7 +1390,7 @@ QVariantList Backend::resultRows(const QJsonDocument &document) {
             documentId = object.value("documentId").toString();
         if (!documentId.isEmpty())
             row.insert("id", documentId);
-        for (const QString key : {"id", "title", "author", "source", "site_name", "category", "location", "summary", "reading_time", "listening_time", "word_count", "url", "source_url", "first_opened_at", "published_date", "saved_at", "reading_progress", "image_url", "notes", "tags"}) {
+        for (const QString key : {"id", "title", "author", "source", "site_name", "category", "location", "summary", "reading_time", "listening_time", "word_count", "url", "source_url", "first_opened_at", "published_date", "saved_at", "reading_progress", "seen", "image_url", "notes", "tags"}) {
             if (key == "tags") {
                 if (!object.value(key).isUndefined() && !object.value(key).isNull())
                     row.insert(key, tagNames(object.value(key)));
@@ -1364,6 +1402,10 @@ QVariantList Backend::resultRows(const QJsonDocument &document) {
             if (!row.contains(key))
                 row.insert(key, QString());
         }
+        if (!row.contains("reading_progress"))
+            row.insert("reading_progress", 0);
+        if (!row.contains("seen"))
+            row.insert("seen", !row.value("first_opened_at").toString().isEmpty());
         if (!row.value("id").toString().isEmpty())
             result.append(row);
     }
@@ -1540,7 +1582,9 @@ void Backend::finish(int exitCode, QProcess::ExitStatus exitStatus) {
         }
         if ((operation == Operation::SaveNote || operation == Operation::SaveTags
              || operation == Operation::CreateHighlight || operation == Operation::SaveHighlightNote
-             || operation == Operation::AddHighlightTags || operation == Operation::RemoveHighlightTags)
+             || operation == Operation::AddHighlightTags || operation == Operation::RemoveHighlightTags
+             || operation == Operation::SetSeen || operation == Operation::SaveProgress
+             || operation == Operation::SaveUrl)
             && root.value("success").isBool()
             && !root.value("success").toBool()) {
             setStatus(tr("Readwise update failed"));
@@ -1551,7 +1595,9 @@ void Backend::finish(int exitCode, QProcess::ExitStatus exitStatus) {
         }
         if ((operation == Operation::SaveNote || operation == Operation::SaveTags
              || operation == Operation::CreateHighlight || operation == Operation::SaveHighlightNote
-             || operation == Operation::AddHighlightTags || operation == Operation::RemoveHighlightTags)
+             || operation == Operation::AddHighlightTags || operation == Operation::RemoveHighlightTags
+             || operation == Operation::SetSeen || operation == Operation::SaveProgress
+             || operation == Operation::SaveUrl)
             && root.value("results").isArray()) {
             for (const QJsonValue &value : root.value("results").toArray()) {
                 const QJsonObject result = value.toObject();
@@ -1730,6 +1776,23 @@ void Backend::finish(int exitCode, QProcess::ExitStatus exitStatus) {
         setStatus(tr("Document moved to %1").arg(m_pendingLocation));
         m_pendingId.clear();
         m_pendingLocation.clear();
+        break;
+    case Operation::SaveUrl:
+        setStatus(tr("URL saved to Reader"));
+        m_pendingUrl.clear();
+        refresh();
+        break;
+    case Operation::SetSeen:
+        updateDocumentRows("seen", m_pendingSeen, m_pendingId);
+        if (m_pendingId == m_selectedId)
+            emit selectedDocumentChanged();
+        setStatus(m_pendingSeen ? tr("Document marked seen") : tr("Document marked unseen"));
+        m_pendingId.clear();
+        break;
+    case Operation::SaveProgress:
+        updateDocumentRows("reading_progress", m_pendingProgress, m_pendingId);
+        setStatus(tr("Reading progress saved"));
+        m_pendingId.clear();
         break;
     case Operation::SaveNote:
         m_selectedNote = m_pendingNote;
