@@ -1,4 +1,4 @@
-# Copy to ~/.config/omawise/reader.toml to customize article typography.
+# Copy to ~/.config/omawise/reader.toml to customize reader appearance, progress, and editor handoff.
 # Omawise reloads this file while running. Values outside supported ranges are clamped.
 
 [reader]
@@ -7,3 +7,5 @@ font_size_px = 12
 line_spacing = 1.2
 paragraph_spacing_pt = 18
 content_width = 760
+progress_mode = "last_position" # last_position or furthest_position
+external_editors = ["neovim", "vscode", "obsidian"]

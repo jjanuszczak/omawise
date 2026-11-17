@@ -1,6 +1,6 @@
 # Implementation handoff
 
-**Status date:** 2026-11-15
+**Status date:** 2026-11-17
 **Current phase:** Phase 1 vertical slice, early development
 **Purpose:** Let another developer or agent continue without relying on conversation history.
 
@@ -8,8 +8,8 @@
 
 - Article formatting is configurable through `~/.config/omawise/reader.toml`, with live reload and bounded fallback values. The `Aa` reader appearance dialog has pickers for article typeface, text size, line spacing, paragraph spacing, and content width; changes are atomically written to TOML and applied while the app runs. Defaults are 12 px text, 1.2 line spacing, and 18 pt between paragraphs, retaining Omawise's current dark colors, Omarchy accent links, and monospace typeface. The 760 px reading column remains configurable.
 - The Arch package includes a TOML example and the `omawise-reader-settings` agent skill under `/usr/share/omawise/`.
-- The article toolbar uses compact Inbox/Later/Archive icons that move the selected article, an `Aa` appearance editor, and an overflow menu with **Copy Markdown** (including YAML frontmatter), highlight, and **Open in Reader** actions.
-- The command palette can save HTTP/HTTPS URLs to Reader through `reader-create-document`; the Info pane and palette can mark a selected document seen/unseen. Reading progress is saved as Omawise's furthest-scroll percentage after forward scrolling and displayed in the library and Info pane. This approximates Reader's reading progress; Reader does not support PDF progress.
+- The article toolbar uses compact Inbox/Later/Archive icons that move the selected article, an `Aa` appearance editor, and an overflow menu with **Copy Markdown** (including YAML frontmatter), highlight, **Open in Reader**, reset progress, open original, and copy original URL actions.
+- The command palette can save HTTP/HTTPS URLs to Reader through `reader-create-document`; the Info pane and palette can mark a selected document seen/unseen. Reading progress is displayed as a scroll percentage and converted to/from Readwise's fractional `reading_progress` field. `reader.toml` supports `progress_mode = "last_position"` (default) or `"furthest_position"`; leaving/switching articles and closing the app flush the selected position, and restore waits for article content layout. The Reader API exposes `reading_progress`, not a separate last-location field; PDF progress remains unsupported.
 
 - Native C++/Qt Quick application target `omawise`, built with qmake (`omawise.pro`); the Arch package and desktop application are also named Omawise.
 - `src/backend.{h,cpp}` invokes the official Readwise CLI asynchronously using `QProcess` argument arrays; it does not shell out or pass CLI credentials.
@@ -26,6 +26,13 @@
 - `docs/readwise-reader-omarchy-prd.md` contains the PRD and roadmap; `docs/phase-0-discovery.md` contains CLI/API discovery.
 
 ## Latest fixes
+
+- Issue [#9](https://github.com/jjanuszczak/omawise/issues/9) tracks last/furthest progress settings, save-on-navigation, and resume behavior. Implementation is in progress on `feat/resume-reading-progress`; this handoff describes the intended behavior, not a verified release.
+- Progress interoperability fix: Reader's API uses a 0–1 fraction, while Omawise's UI works in integer percentages. The backend now converts both directions and has a fake-CLI regression fixture for 37% readback and 42% write payloads.
+- Progress writes use the keyring-backed Reader API when connected, on a request path independent of article detail loading; the CLI fallback also runs separately from article requests. Successful progress writes update the session list and persisted library cache. Runtime account sync and latency still need user confirmation.
+- Markdown clipboard export now converts HTML with a normal text default font so prose is not emitted as inline code. The overflow menu has an **Open in…** submenu for Reader and installed, configured editors. Neovim and Helix open a Markdown file in the detected terminal, VS Code and other file editors open an export under `Documents/Omawise Reader`, and Obsidian creates a note from clipboard content via its URI handler.
+- The overflow menu's **Open original** and **Copy document URL** actions use `source_url`, while **Open in Reader** continues to use the Readwise `url` field. **Reset reading progress** clears local tracking immediately and queues an asynchronous zero-progress update. Readwise documents public-link creation and removal in its UI, but its published Reader API and official CLI expose no corresponding operation; public-link toggling and toolbar copying remain unsupported until Readwise provides a supported API/CLI path.
+- The library navigation footer links to the Reader profile and preferences pages and opens Omawise settings. The local dialog edits the full supported `reader.toml` settings, including external-editor choices; the article `Aa` button opens the same dialog.
 
 - `feat/pagination-cache-account-validation` implements cursor pagination through both the CLI and direct API paths. The backend appends subsequent 50-document pages and deduplicates by document ID. Read-only account checks confirmed two 50-document Inbox pages through each path with zero duplicate IDs. The fake-CLI suite covers cursor argument forwarding, append behavior, and duplicate removal.
 - `feat/issue-3-persistent-cache-latency` adds atomic persistent article and first-page library caches, background refresh, account-switch cache clearing, and highlight refresh before annotation writes. Cached library rows omit document notes/tags; credentials and highlights are never persisted.
@@ -94,7 +101,8 @@ Do not issue account calls during routine development; use a fake `readwise` exe
 1. Confirm the offscreen cached-action and startup p50/p95 on Omarchy hardware.
 2. Measure direct API p95 with the keyring-backed app when connected; the existing API account comparison recorded five-run medians only. CLI list/detail p50/p95 are now recorded above.
 3. Continue routine development with fake CLI fixtures. The title-search parser, persistent cache lifecycle, refresh fallback, expiry, clear, and highlight preflight now have regression coverage.
-4. Consider offline reading, settings and shortcut customization, and dedicated PDF/EPUB viewers as future work. Keep PDF/EPUB anchoring, TTS, Ghostreader, and complete Reader parity out of current claims.
+4. Verify last-position and furthest-position save/resume behavior against the fake CLI, including rapid document switches and delayed writes; confirm the reader settings reload and UI on Omarchy hardware.
+5. Consider offline reading, shortcut customization, and dedicated PDF/EPUB viewers as future work. Keep PDF/EPUB anchoring, TTS, Ghostreader, and complete Reader parity out of current claims.
 
 ## Contributor instructions
 

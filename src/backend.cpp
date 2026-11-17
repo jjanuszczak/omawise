@@ -27,6 +27,7 @@
 #include <QThreadPool>
 #include <QMetaObject>
 #include <algorithm>
+#include <cmath>
 #ifdef signals
 #undef signals
 #define OMAWISE_RESTORE_QT_SIGNALS
@@ -64,6 +65,16 @@ QStringList tagNames(const QJsonValue &value) {
         }
     }
     return tags;
+}
+
+int readingProgressPercent(const QJsonValue &value) {
+    if (!value.isDouble())
+        return 0;
+    const double progress = value.toDouble();
+    if (!std::isfinite(progress))
+        return 0;
+    const double percentage = progress >= 0.0 && progress <= 1.0 ? progress * 100.0 : progress;
+    return qBound(0, qRound(percentage), 100);
 }
 
 bool isHtmlContent(const QString &content) {
@@ -136,6 +147,56 @@ Backend::Backend(QObject *parent) : QObject(parent) {
             m_timedOut = true;
             m_process.kill();
         }
+    });
+    m_progressTimeout.setSingleShot(true);
+    m_progressTimeout.setInterval(30000);
+    connect(&m_progressTimeout, &QTimer::timeout, this, [this] {
+        if (m_progressReply) {
+            m_progressTimedOut = true;
+            m_progressReply->abort();
+        } else if (m_progressProcess.state() != QProcess::NotRunning) {
+            m_progressTimedOut = true;
+            m_progressProcess.kill();
+        }
+    });
+    connect(&m_progressProcess, &QProcess::finished, this,
+            [this](int exitCode, QProcess::ExitStatus exitStatus) {
+        m_progressTimeout.stop();
+        const QString id = m_activeProgressId;
+        const int progress = m_activeProgress;
+        m_activeProgressId.clear();
+        const QByteArray output = m_progressProcess.readAllStandardOutput();
+        const QString standardError = QString::fromUtf8(m_progressProcess.readAllStandardError()).trimmed();
+        QString failure;
+        if (m_progressTimedOut) {
+            m_progressTimedOut = false;
+            failure = tr("The Readwise CLI did not respond before the progress update timed out.");
+        } else if (exitStatus != QProcess::NormalExit || exitCode != 0) {
+            failure = standardError.isEmpty()
+                ? tr("Readwise CLI exited with code %1 while saving progress.").arg(exitCode)
+                : standardError;
+        }
+        completeProgressWrite(id, progress, output, failure);
+        if (m_queuedProgressWrites.isEmpty())
+            setProgressBusy(false);
+        else
+            startNextProgressWrite();
+    });
+    connect(&m_progressProcess, &QProcess::errorOccurred, this,
+            [this](QProcess::ProcessError error) {
+        if (error != QProcess::FailedToStart)
+            return;
+        m_progressTimeout.stop();
+        const QString id = m_activeProgressId;
+        const int progress = m_activeProgress;
+        m_activeProgressId.clear();
+        m_progressTimedOut = false;
+        completeProgressWrite(id, progress, {},
+                              tr("Could not start the Readwise CLI to save reading progress."));
+        if (m_queuedProgressWrites.isEmpty())
+            setProgressBusy(false);
+        else
+            startNextProgressWrite();
     });
     connect(&m_process, &QProcess::errorOccurred, this, [this](QProcess::ProcessError error) {
         if (error == QProcess::FailedToStart) {
@@ -483,7 +544,7 @@ void Backend::clearApiTokenFromKeyring() {
 }
 
 void Backend::saveApiToken(const QString &value) {
-    if (m_busy || m_apiLoginBusy) {
+    if (m_busy || m_progressBusy || m_apiLoginBusy) {
         setApiLoginError(tr("Wait for the current Readwise request to finish."));
         return;
     }
@@ -502,7 +563,7 @@ void Backend::saveApiToken(const QString &value) {
 }
 
 void Backend::forgetApiToken() {
-    if (m_busy || m_apiLoginBusy)
+    if (m_busy || m_progressBusy || m_apiLoginBusy)
         return;
     m_pendingApiToken.clear();
     m_apiTokenRejected = false;
@@ -527,6 +588,138 @@ void Backend::runApiGet(const QUrl &url, Operation operation, const QString &tok
     m_apiReply = m_network.get(request);
     m_timeout.setInterval(30000);
     m_timeout.start();
+}
+
+void Backend::queueProgressWrite(const QString &id, int progress) {
+    m_queuedProgressWrites.insert(id, progress);
+    setProgressBusy(true);
+    startNextProgressWrite();
+}
+
+void Backend::startNextProgressWrite() {
+    if (m_progressReply || m_progressProcess.state() != QProcess::NotRunning
+        || m_queuedProgressWrites.isEmpty())
+        return;
+
+    clearError();
+    const QString id = m_queuedProgressWrites.keys().first();
+    const int progress = m_queuedProgressWrites.take(id);
+    m_activeProgressId = id;
+    m_activeProgress = progress;
+
+    if (!apiTokenAvailable()) {
+        const QString executable = QStandardPaths::findExecutable("readwise");
+        if (executable.isEmpty()) {
+            m_activeProgressId.clear();
+            completeProgressWrite(id, progress, {},
+                                  tr("Install the official Readwise CLI or connect a Readwise API token to save reading progress."));
+            if (m_queuedProgressWrites.isEmpty())
+                setProgressBusy(false);
+            else
+                startNextProgressWrite();
+            return;
+        }
+        const QJsonObject document{{"document_id", id}, {"reading_progress", progress / 100.0}};
+        const QJsonArray documents{document};
+        m_progressProcess.setProgram(executable);
+        m_progressProcess.setArguments({"--json", "reader-bulk-edit-document-metadata", "--documents",
+                                        QString::fromUtf8(QJsonDocument(documents).toJson(QJsonDocument::Compact))});
+        m_progressProcess.setProcessChannelMode(QProcess::SeparateChannels);
+        m_progressProcess.start();
+        m_progressTimeout.start();
+        return;
+    }
+
+    const QJsonObject update{{"id", id}, {"reading_progress", progress / 100.0}};
+    const QJsonObject payload{{"updates", QJsonArray{update}}};
+    const QByteArray body = QJsonDocument(payload).toJson(QJsonDocument::Compact);
+    const QUrl url(QStringLiteral("https://readwise.io/api/v3/bulk_update/"));
+    QNetworkRequest request(url);
+    request.setRawHeader("Authorization", QByteArrayLiteral("Token ") + m_apiToken.toUtf8());
+    request.setRawHeader("Accept", "application/json");
+    request.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
+    request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::ManualRedirectPolicy);
+    m_progressReply = m_network.sendCustomRequest(request, QByteArrayLiteral("PATCH"), body);
+    m_progressTimeout.start();
+    connect(m_progressReply, &QNetworkReply::finished, this, [this, id, progress] {
+        QNetworkReply *reply = m_progressReply;
+        if (!reply)
+            return;
+        m_progressTimeout.stop();
+        m_progressReply = nullptr;
+        const int statusCode = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+        const QNetworkReply::NetworkError networkError = reply->error();
+        const QByteArray responseBody = reply->readAll();
+        reply->deleteLater();
+
+        QString failure;
+        if (m_progressTimedOut) {
+            m_progressTimedOut = false;
+            failure = tr("Readwise did not respond before the progress update timed out.");
+        } else if (networkError != QNetworkReply::NoError || statusCode < 200 || statusCode >= 300) {
+            failure = tr("Readwise API progress update failed (HTTP %1).").arg(statusCode);
+            if (statusCode == 401 || statusCode == 403) {
+                setApiTokenRejected(true);
+                m_queuedProgressWrites.clear();
+            }
+        }
+        completeProgressWrite(id, progress, responseBody, failure);
+
+        if (m_queuedProgressWrites.isEmpty())
+            setProgressBusy(false);
+        else
+            startNextProgressWrite();
+    });
+}
+
+void Backend::completeProgressWrite(const QString &id, int progress, const QByteArray &response,
+                                    const QString &requestFailure) {
+    QString failure = requestFailure;
+    if (failure.isEmpty()) {
+        QJsonParseError parseError;
+        const QJsonDocument document = QJsonDocument::fromJson(response, &parseError);
+        if (parseError.error != QJsonParseError::NoError || !document.isObject()) {
+            failure = tr("Readwise returned an unrecognized progress update response.");
+        } else {
+            const QJsonObject root = document.object();
+            const QString error = root.value("error").toString();
+            if (root.value("isError").toBool() || !error.isEmpty())
+                failure = error.isEmpty() ? tr("Readwise rejected the progress update.") : error;
+            else if (root.value("success").isBool() && !root.value("success").toBool())
+                failure = root.value("message").toString(tr("Readwise rejected the progress update."));
+            else {
+                const QJsonArray results = root.value("results").toArray();
+                if (results.isEmpty()) {
+                    failure = tr("Readwise returned no result for the progress update.");
+                } else {
+                    for (const QJsonValue &value : results) {
+                        const QJsonObject result = value.toObject();
+                        if (result.value("success").isBool() && !result.value("success").toBool()) {
+                            failure = result.value("error").toString(tr("Readwise rejected the progress update."));
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if (!failure.isEmpty()) {
+        setStatus(tr("Reading progress could not be saved"));
+        fail(failure);
+        return;
+    }
+    updateDocumentRows("reading_progress", progress, id);
+    writePersistentLibrary(m_location);
+    setApiTokenRejected(false);
+    setStatus(tr("Reading progress saved"));
+}
+
+void Backend::setProgressBusy(bool busy) {
+    if (m_progressBusy == busy)
+        return;
+    m_progressBusy = busy;
+    emit progressBusyChanged();
 }
 
 void Backend::handleApiReply(QNetworkReply *reply) {
@@ -950,13 +1143,8 @@ void Backend::saveReadingProgress(const QString &id, int progress) {
     if (id.isEmpty())
         return;
     progress = qBound(0, progress, 100);
-    QJsonObject document{{"document_id", id}, {"reading_progress", progress}};
-    QJsonArray documents{document};
-    m_pendingId = id;
-    m_pendingProgress = progress;
     setStatus(tr("Saving reading progress…"));
-    run({"--json", "reader-bulk-edit-document-metadata", "--documents",
-         QString::fromUtf8(QJsonDocument(documents).toJson(QJsonDocument::Compact))}, Operation::SaveProgress);
+    queueProgressWrite(id, progress);
 }
 
 void Backend::saveDocumentNote(const QString &id, const QString &note) {
@@ -1188,6 +1376,174 @@ bool Backend::openExternalUrl(const QString &value) {
     return QDesktopServices::openUrl(url);
 }
 
+QVariantList Backend::externalEditorOptions() const {
+    QVariantList result;
+    QString terminal;
+    for (const QString &candidate : {QStringLiteral("foot"), QStringLiteral("kitty"),
+                                     QStringLiteral("alacritty"), QStringLiteral("ghostty")}) {
+        terminal = QStandardPaths::findExecutable(candidate);
+        if (!terminal.isEmpty())
+            break;
+    }
+
+    const QList<QPair<QString, QString>> definitions{
+        {"neovim", "Neovim"}, {"vscode", "Visual Studio Code"}, {"obsidian", "Obsidian"},
+        {"helix", "Helix"}, {"emacs", "Emacs"}, {"zed", "Zed"},
+        {"sublime", "Sublime Text"}, {"kate", "Kate"}, {"mousepad", "Mousepad"}};
+    for (const auto &definition : definitions) {
+        const QString &id = definition.first;
+        QString command;
+        if (id == "neovim") command = "nvim";
+        else if (id == "vscode") command = "code";
+        else if (id == "obsidian") command = "obsidian";
+        else if (id == "helix") command = "hx";
+        else if (id == "emacs") command = "emacs";
+        else if (id == "zed") command = "zed";
+        else if (id == "sublime") command = "subl";
+        else if (id == "kate") command = "kate";
+        else if (id == "mousepad") command = "mousepad";
+        const bool installed = !QStandardPaths::findExecutable(command).isEmpty()
+            && (!((id == "neovim" || id == "helix") && terminal.isEmpty()));
+        result.append(QVariantMap{{"id", id}, {"label", definition.second}, {"installed", installed}});
+    }
+    return result;
+}
+
+QVariantList Backend::availableExternalEditors(const QStringList &configured) const {
+    QVariantList result;
+    for (const QVariant &option : externalEditorOptions()) {
+        const QVariantMap editor = option.toMap();
+        if (editor.value(QStringLiteral("installed")).toBool()
+            && configured.contains(editor.value(QStringLiteral("id")).toString()))
+            result.append(editor);
+    }
+    return result;
+}
+
+QString Backend::writeEditorMarkdownFile(const QString &markdown, const QVariantMap &metadata) const {
+    const QString documentsDirectory = QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation);
+    QString directory = documentsDirectory.isEmpty()
+        ? QString() : QDir(documentsDirectory).filePath(QStringLiteral("Omawise Reader"));
+    if (!directory.isEmpty() && !QDir().mkpath(directory))
+        directory.clear();
+    if (directory.isEmpty()) {
+        directory = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation)
+            + QStringLiteral("/editor-handoff");
+        if (!QDir().mkpath(directory))
+            return {};
+    }
+
+    QString title = metadata.value(QStringLiteral("title")).toString().trimmed();
+    title.replace(QRegularExpression(QStringLiteral("[^A-Za-z0-9._-]+")), QStringLiteral("-"));
+    title = title.left(80);
+    while (title.startsWith(QLatin1Char('-'))) title.remove(0, 1);
+    while (title.endsWith(QLatin1Char('-'))) title.chop(1);
+    if (title.isEmpty())
+        title = QStringLiteral("article");
+    QString id = metadata.value(QStringLiteral("id")).toString();
+    id.replace(QRegularExpression(QStringLiteral("[^A-Za-z0-9_-]+")), QString());
+    id = id.left(16);
+    const QString stem = id.isEmpty() ? title : title + QLatin1Char('-') + id;
+
+    for (int suffix = 1; suffix < 1000; ++suffix) {
+        const QString filename = stem + (suffix == 1 ? QString() : QStringLiteral("-%1").arg(suffix))
+            + QStringLiteral(".md");
+        const QString path = QDir(directory).filePath(filename);
+        if (QFileInfo::exists(path))
+            continue;
+        QSaveFile file(path);
+        if (!file.open(QIODevice::WriteOnly | QIODevice::Text))
+            return {};
+        file.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner);
+        const QByteArray bytes = markdown.toUtf8();
+        if (file.write(bytes) != bytes.size() || !file.commit())
+            return {};
+        return path;
+    }
+    return {};
+}
+
+bool Backend::openArticleInEditor(const QString &editorId, const QString &content,
+                                  const QVariantMap &metadata) {
+    const QString markdown = articleMarkdown(content, metadata);
+    if (markdown.isEmpty() || !QGuiApplication::instance())
+        return false;
+    QGuiApplication::clipboard()->setText(markdown);
+
+    if (editorId == QStringLiteral("obsidian")) {
+        QUrl uri(QStringLiteral("obsidian://new"));
+        QUrlQuery query;
+        QString title = metadata.value(QStringLiteral("title")).toString().trimmed();
+        if (title.isEmpty())
+            title = tr("Reader article");
+        query.addQueryItem(QStringLiteral("name"), title);
+        query.addQueryItem(QStringLiteral("clipboard"), QStringLiteral("true"));
+        uri.setQuery(query);
+        if (!QDesktopServices::openUrl(uri)) {
+            setStatus(tr("Could not open Obsidian"));
+            fail(tr("Obsidian did not accept the new-note request."));
+            return false;
+        }
+        setStatus(tr("Article opened in Obsidian"));
+        return true;
+    }
+
+    const QVariantList available = availableExternalEditors(
+        {"neovim", "vscode", "helix", "emacs", "zed", "sublime", "kate", "mousepad"});
+    QString label;
+    for (const QVariant &value : available) {
+        const QVariantMap editor = value.toMap();
+        if (editor.value(QStringLiteral("id")).toString() == editorId) {
+            label = editor.value(QStringLiteral("label")).toString();
+            break;
+        }
+    }
+    if (label.isEmpty()) {
+        setStatus(tr("Editor is not available"));
+        fail(tr("That editor is not installed or configured."));
+        return false;
+    }
+
+    const QString path = writeEditorMarkdownFile(markdown, metadata);
+    if (path.isEmpty()) {
+        setStatus(tr("Could not prepare article Markdown"));
+        fail(tr("Could not write the article export under Documents/Omawise Reader."));
+        return false;
+    }
+
+    QString executable;
+    QStringList arguments;
+    if (editorId == QStringLiteral("neovim") || editorId == QStringLiteral("helix")) {
+        QString terminal;
+        for (const QString &candidate : {QStringLiteral("foot"), QStringLiteral("kitty"),
+                                         QStringLiteral("alacritty"), QStringLiteral("ghostty")}) {
+            terminal = QStandardPaths::findExecutable(candidate);
+            if (!terminal.isEmpty())
+                break;
+        }
+        executable = terminal;
+        arguments = {QStringLiteral("-e"), editorId == QStringLiteral("neovim")
+                         ? QStringLiteral("nvim") : QStringLiteral("hx"), path};
+    } else {
+        QString command = editorId;
+        if (editorId == QStringLiteral("vscode")) command = QStringLiteral("code");
+        else if (editorId == QStringLiteral("emacs")) command = QStringLiteral("emacs");
+        else if (editorId == QStringLiteral("sublime")) command = QStringLiteral("subl");
+        else if (editorId == QStringLiteral("mousepad")) command = QStringLiteral("mousepad");
+        executable = QStandardPaths::findExecutable(command);
+        if (editorId == QStringLiteral("vscode"))
+            arguments.append(QStringLiteral("--reuse-window"));
+        arguments.append(path);
+    }
+    if (!QProcess::startDetached(executable, arguments)) {
+        setStatus(tr("Could not open %1").arg(label));
+        fail(tr("The editor process could not be started."));
+        return false;
+    }
+    setStatus(tr("Article opened in %1").arg(label));
+    return true;
+}
+
 QString Backend::formattedMarkdown(const QString &markdown, const QString &accent,
                                   const QVariantMap &readerStyle) const {
     const QString fontFamily = readerStyle.value("fontFamily", "monospace").toString();
@@ -1262,13 +1618,14 @@ QString Backend::formattedMarkdown(const QString &markdown, const QString &accen
     return formattedHtml;
 }
 
-bool Backend::copyArticleMarkdown(const QString &content, const QVariantMap &metadata) {
-    if (content.isEmpty() || !QGuiApplication::instance())
-        return false;
+QString Backend::articleMarkdown(const QString &content, const QVariantMap &metadata) const {
+    if (content.isEmpty())
+        return {};
 
     QString markdown = content;
     if (isHtmlContent(content)) {
         QTextDocument document;
+        document.setDefaultFont(QFont(QStringLiteral("sans-serif")));
         document.setHtml(content);
         markdown = document.toMarkdown();
     }
@@ -1317,8 +1674,29 @@ bool Backend::copyArticleMarkdown(const QString &content, const QVariantMap &met
 
     if (!markdown.endsWith(QLatin1Char('\n')))
         markdown += QLatin1Char('\n');
-    QGuiApplication::clipboard()->setText(frontmatter + markdown);
+    return frontmatter + markdown;
+}
+
+bool Backend::copyArticleMarkdown(const QString &content, const QVariantMap &metadata) {
+    if (!QGuiApplication::instance())
+        return false;
+    const QString markdown = articleMarkdown(content, metadata);
+    if (markdown.isEmpty())
+        return false;
+    QGuiApplication::clipboard()->setText(markdown);
     setStatus(tr("Article Markdown copied to clipboard"));
+    return true;
+}
+
+bool Backend::copyDocumentUrl(const QString &value) {
+    const QUrl url(value, QUrl::StrictMode);
+    const QString scheme = url.scheme().toLower();
+    if (!QGuiApplication::instance() || !url.isValid()
+        || (scheme != QStringLiteral("http") && scheme != QStringLiteral("https"))
+        || url.host().isEmpty())
+        return false;
+    QGuiApplication::clipboard()->setText(url.toString(QUrl::FullyEncoded));
+    setStatus(tr("Original document URL copied to clipboard"));
     return true;
 }
 
@@ -1394,6 +1772,9 @@ QVariantList Backend::resultRows(const QJsonDocument &document) {
             if (key == "tags") {
                 if (!object.value(key).isUndefined() && !object.value(key).isNull())
                     row.insert(key, tagNames(object.value(key)));
+            } else if (key == "reading_progress") {
+                if (!object.value(key).isUndefined() && !object.value(key).isNull())
+                    row.insert(key, readingProgressPercent(object.value(key)));
             } else if (!object.value(key).isUndefined() && !object.value(key).isNull()) {
                 row.insert(key, object.value(key).toVariant());
             }
@@ -1583,7 +1964,7 @@ void Backend::finish(int exitCode, QProcess::ExitStatus exitStatus) {
         if ((operation == Operation::SaveNote || operation == Operation::SaveTags
              || operation == Operation::CreateHighlight || operation == Operation::SaveHighlightNote
              || operation == Operation::AddHighlightTags || operation == Operation::RemoveHighlightTags
-             || operation == Operation::SetSeen || operation == Operation::SaveProgress
+             || operation == Operation::SetSeen
              || operation == Operation::SaveUrl)
             && root.value("success").isBool()
             && !root.value("success").toBool()) {
@@ -1596,7 +1977,7 @@ void Backend::finish(int exitCode, QProcess::ExitStatus exitStatus) {
         if ((operation == Operation::SaveNote || operation == Operation::SaveTags
              || operation == Operation::CreateHighlight || operation == Operation::SaveHighlightNote
              || operation == Operation::AddHighlightTags || operation == Operation::RemoveHighlightTags
-             || operation == Operation::SetSeen || operation == Operation::SaveProgress
+             || operation == Operation::SetSeen
              || operation == Operation::SaveUrl)
             && root.value("results").isArray()) {
             for (const QJsonValue &value : root.value("results").toArray()) {
@@ -1787,11 +2168,6 @@ void Backend::finish(int exitCode, QProcess::ExitStatus exitStatus) {
         if (m_pendingId == m_selectedId)
             emit selectedDocumentChanged();
         setStatus(m_pendingSeen ? tr("Document marked seen") : tr("Document marked unseen"));
-        m_pendingId.clear();
-        break;
-    case Operation::SaveProgress:
-        updateDocumentRows("reading_progress", m_pendingProgress, m_pendingId);
-        setStatus(tr("Reading progress saved"));
         m_pendingId.clear();
         break;
     case Operation::SaveNote:
