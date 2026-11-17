@@ -27,7 +27,7 @@
 
 ## Latest fixes
 
-- Issue [#9](https://github.com/jjanuszczak/omawise/issues/9) tracks last/furthest progress settings, save-on-navigation, and resume behavior. Implementation is in progress on `feat/resume-reading-progress`; this handoff describes the intended behavior, not a verified release.
+- Issue [#9](https://github.com/jjanuszczak/omawise/issues/9) tracked last/furthest progress settings, save-on-navigation, and resume behavior. The implementation merged through PR [#10](https://github.com/jjanuszczak/omawise/pull/10); account-level verification is still outstanding.
 - Progress interoperability fix: Reader's API uses a 0–1 fraction, while Omawise's UI works in integer percentages. The backend now converts both directions and has a fake-CLI regression fixture for 37% readback and 42% write payloads.
 - Progress writes use the keyring-backed Reader API when connected, on a request path independent of article detail loading; the CLI fallback also runs separately from article requests. Successful progress writes update the session list and persisted library cache. Runtime account sync and latency still need user confirmation.
 - Markdown clipboard export now converts HTML with a normal text default font so prose is not emitted as inline code. The overflow menu has an **Open in…** submenu for Reader and installed, configured editors. Neovim and Helix open a Markdown file in the detected terminal, VS Code and other file editors open an export under `Documents/Omawise Reader`, and Obsidian creates a note from clipboard content via its URI handler.
@@ -70,7 +70,7 @@
 - `./bin/package` creates a local Arch package from the current checkout without installing it; `./bin/install` builds and installs the checkout through `makepkg`/`pacman`. Both use `build/makepkg/` for makepkg's work directory so `--cleanbuild` cannot collide with the project's `src/` folder.
 - `.github/workflows/release.yml` runs on `v*` tags, verifies the tag equals `v<pkgver>`, builds and checks in Arch Linux, then creates a GitHub Release with the `.pkg.tar.zst` package attached.
 - To publish a release, update `pkgver` in `PKGBUILD`, commit, and push the matching tag. The package currently targets x86_64 Arch Linux/Omarchy. A user can install the downloaded asset with `sudo pacman -U ./omawise-*.pkg.tar.zst`.
-- Release `v0.1.3` is published at <https://github.com/jjanuszczak/omawise/releases/tag/v0.1.3> with `omawise-0.1.3-1-x86_64.pkg.tar.zst` attached. Its GitHub Actions build, tests, package assembly, and release upload all passed.
+- Release `v0.1.4` is published at <https://github.com/jjanuszczak/omawise/releases/tag/v0.1.4> with `omawise-0.1.4-1-x86_64.pkg.tar.zst` attached. Its GitHub Actions build, tests, package assembly, and release upload all passed.
 
 Do not issue account calls during routine development; use a fake `readwise` executable for interaction checks unless the user explicitly asks to test against a real account.
 
@@ -94,7 +94,7 @@ Do not issue account calls during routine development; use a fake `readwise` exe
 - The exact earlier metadata-write failure remains unclassified because its error details were not saved. The current same-value account write/readback path succeeded without changing the note.
 - The local development package has been assembled successfully, but it has not been installed or launched from the installed package.
 - GitHub Actions reported non-blocking Node.js 20 deprecation annotations for the v4 actions and a future `ubuntu-latest` image migration; update runner/action versions when needed.
-- Current release commit `6c9dd98` (`Fix clean Arch package builds`) is on `main` and tagged `v0.1.3`.
+- Current published release commit `c0a5b04` (`chore: prepare v0.1.4 release`) is tagged `v0.1.4`. The `0.1.5` release commit and tag are being prepared from the merged `main` state.
 
 ## Suggested next steps
 

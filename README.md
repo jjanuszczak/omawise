@@ -22,7 +22,7 @@ Build and run the regression suite with `./bin/build`; run just the tests with `
 
 ## Build and release packages
 
-On Arch/Omarchy, install the [latest Omawise release](https://github.com/jjanuszczak/omawise/releases/latest) with `sudo pacman -U ./omawise-*.pkg.tar.zst`. `./bin/package` builds a package from a checkout without installing it; `./bin/install` builds and installs the checkout through `makepkg` and `pacman`. To publish a release, update `pkgver` in `PKGBUILD`, commit the change, and push the matching tag (for example, `v0.1.4`). GitHub Actions checks the app and attaches an x86_64 Arch package to the release.
+On Arch/Omarchy, install the [latest Omawise release](https://github.com/jjanuszczak/omawise/releases/latest) with `sudo pacman -U ./omawise-*.pkg.tar.zst`. `./bin/package` builds a package from a checkout without installing it; `./bin/install` builds and installs the checkout through `makepkg` and `pacman`. To publish a release, update `pkgver` in `PKGBUILD`, commit the change, and push the matching tag (for example, `v0.1.5`). GitHub Actions checks the app and attaches an x86_64 Arch package to the release.
 
 The app icon and sidebar use the vector mark in `assets/omawise-mark.svg`; dark and light horizontal wordmarks for promotional use are in `marketing/omawise-logo.svg` and `marketing/omawise-logo-light.svg`.
 
