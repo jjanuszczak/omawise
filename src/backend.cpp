@@ -84,6 +84,59 @@ bool isHtmlContent(const QString &content) {
     return htmlStart.match(content.trimmed()).hasMatch();
 }
 
+QString markdownInlineCode(const QString &source) {
+    QString code = source;
+    code.replace(QRegularExpression(QStringLiteral("\\r?\\n")), QStringLiteral(" "));
+    int longestBacktickRun = 0;
+    auto runs = QRegularExpression(QStringLiteral("`+")).globalMatch(code);
+    while (runs.hasNext())
+        longestBacktickRun = std::max(longestBacktickRun,
+                                      static_cast<int>(runs.next().capturedLength()));
+    const QString delimiter(longestBacktickRun + 1, QLatin1Char('`'));
+    const bool pad = code.startsWith(QLatin1Char('`')) || code.endsWith(QLatin1Char('`'))
+        || (code.startsWith(QLatin1Char(' ')) && code.endsWith(QLatin1Char(' '))
+            && !code.trimmed().isEmpty());
+    return delimiter + (pad ? QStringLiteral(" ") : QString()) + code
+        + (pad ? QStringLiteral(" ") : QString()) + delimiter;
+}
+
+QString htmlToMarkdown(const QString &html) {
+    QString preparedHtml;
+    QHash<QString, QString> inlineCodeSpans;
+    const QRegularExpression codeOrPre(
+        QStringLiteral("(<pre\\b[^>]*>.*?</pre\\s*>)|(<code\\b[^>]*>(.*?)</code\\s*>)"),
+        QRegularExpression::CaseInsensitiveOption | QRegularExpression::DotMatchesEverythingOption);
+    qsizetype offset = 0;
+    int placeholderIndex = 0;
+    auto matches = codeOrPre.globalMatch(html);
+    while (matches.hasNext()) {
+        const auto match = matches.next();
+        preparedHtml += html.mid(offset, match.capturedStart() - offset);
+        if (match.capturedStart(1) >= 0) {
+            preparedHtml += match.captured(1);
+        } else {
+            QTextDocument codeDocument;
+            codeDocument.setDefaultFont(QFont(QStringLiteral("sans-serif")));
+            codeDocument.setHtml(QStringLiteral("<html><body>") + match.captured(3)
+                                 + QStringLiteral("</body></html>"));
+            const QString placeholder = QStringLiteral("OMAWISEINLINECODEPLACEHOLDER%1END")
+                .arg(placeholderIndex++);
+            preparedHtml += placeholder;
+            inlineCodeSpans.insert(placeholder, markdownInlineCode(codeDocument.toPlainText()));
+        }
+        offset = match.capturedEnd();
+    }
+    preparedHtml += html.mid(offset);
+
+    QTextDocument document;
+    document.setDefaultFont(QFont(QStringLiteral("sans-serif")));
+    document.setHtml(preparedHtml);
+    QString markdown = document.toMarkdown();
+    for (auto it = inlineCodeSpans.cbegin(); it != inlineCodeSpans.cend(); ++it)
+        markdown.replace(it.key(), it.value());
+    return markdown;
+}
+
 QString yamlQuotedString(const QString &value) {
     QJsonArray array;
     array.append(value);
@@ -1623,12 +1676,8 @@ QString Backend::articleMarkdown(const QString &content, const QVariantMap &meta
         return {};
 
     QString markdown = content;
-    if (isHtmlContent(content)) {
-        QTextDocument document;
-        document.setDefaultFont(QFont(QStringLiteral("sans-serif")));
-        document.setHtml(content);
-        markdown = document.toMarkdown();
-    }
+    if (isHtmlContent(content))
+        markdown = htmlToMarkdown(content);
 
     QString frontmatter = QStringLiteral("---\n");
     const QString sourceKey = metadata.value(QStringLiteral("site_name")).toString().trimmed().isEmpty()
