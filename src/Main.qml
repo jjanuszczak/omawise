@@ -11,6 +11,15 @@ ApplicationWindow {
     minimumWidth: 1140
     minimumHeight: 650
     title: qsTr("Omawise")
+    onClosing: function(close) {
+        if (allowWindowClose || !reading || !backend.selectedContent)
+            return
+        saveCurrentProgress(true)
+        if (backend.busy || backend.progressBusy || Object.keys(queuedProgressSaves).length > 0) {
+            pendingCloseAfterProgress = true
+            close.accepted = false
+        }
+    }
     color: "#17191d"
     Material.theme: Material.Dark
     Material.accent: theme.accent
@@ -32,6 +41,13 @@ ApplicationWindow {
     property bool refocusDocumentTagEditorAfterSave: false
     property int highestReadingProgress: 0
     property int lastSavedReadingProgress: 0
+    property int currentReadingProgress: 0
+    property string progressDocumentId: ""
+    property var queuedProgressSaves: ({})
+    property bool pendingProgressRestore: false
+    property string restoredProgressDocumentId: ""
+    property bool pendingCloseAfterProgress: false
+    property bool allowWindowClose: false
 
     function selectedDocument() {
         if (selectedIndex < 0 || selectedIndex >= backend.documents.length)
@@ -127,8 +143,14 @@ ApplicationWindow {
     function openSelected() {
         const doc = selectedDocument()
         if (doc.id) {
+            if (reading)
+                saveCurrentProgress(true)
             highestReadingProgress = Math.max(0, Number(doc.reading_progress) || 0)
             lastSavedReadingProgress = highestReadingProgress
+            currentReadingProgress = highestReadingProgress
+            progressDocumentId = doc.id
+            pendingProgressRestore = true
+            restoredProgressDocumentId = ""
             articleFlickable.contentY = 0
             reading = true
             backend.openDocument(doc.id, doc.title || "", doc.author || "", doc.url || "", documentTags(doc), doc.notes || "")
@@ -136,13 +158,19 @@ ApplicationWindow {
     }
 
     function activateDocument(index, id) {
+        if (reading)
+            saveCurrentProgress(true)
         selectedIndex = index
         documentList.currentIndex = index
-        articleFlickable.contentY = 0
-        reading = true
         const doc = selectedDocument()
         highestReadingProgress = Math.max(0, Number(doc.reading_progress) || 0)
         lastSavedReadingProgress = highestReadingProgress
+        currentReadingProgress = highestReadingProgress
+        progressDocumentId = id
+        pendingProgressRestore = true
+        restoredProgressDocumentId = ""
+        articleFlickable.contentY = 0
+        reading = true
         backend.openDocument(id, doc.title || "", doc.author || "", doc.url || "", documentTags(doc), doc.notes || "")
     }
 
@@ -152,7 +180,7 @@ ApplicationWindow {
     }
 
     function returnToLibrary() {
-        saveCurrentProgress()
+        saveCurrentProgress(true)
         const movedFromCurrentView = documentLocation() !== backend.location
         reading = false
         if (movedFromCurrentView)
@@ -160,21 +188,66 @@ ApplicationWindow {
         Qt.callLater(function() { documentList.forceActiveFocus() })
     }
 
-    function saveCurrentProgress() {
-        const id = selectedDocument().id || ""
+    function saveCurrentProgress(force) {
+        const id = progressDocumentId || selectedDocument().id || ""
         if (!id || !backend.selectedContent)
             return
         const range = Math.max(1, articleFlickable.contentHeight - articleFlickable.height)
         const current = Math.min(100, Math.max(0, Math.round(articleFlickable.contentY / range * 100)))
+        currentReadingProgress = current
         highestReadingProgress = Math.max(highestReadingProgress, current)
-        if (highestReadingProgress > lastSavedReadingProgress) {
-            if (backend.busy) {
+        const value = theme.readerStyle.progressMode === "furthest_position"
+            ? highestReadingProgress : currentReadingProgress
+        if (value !== lastSavedReadingProgress || force)
+            queueProgressSave(id, value, force)
+    }
+
+    function queueProgressSave(id, value, immediate) {
+        if (!id)
+            return
+        const queued = Object.assign({}, queuedProgressSaves)
+        queued[id] = value
+        queuedProgressSaves = queued
+        if (immediate && !backend.busy) {
+            delete queued[id]
+            queuedProgressSaves = queued
+            backend.saveReadingProgress(id, value)
+            if (id === progressDocumentId)
+                lastSavedReadingProgress = value
+            if (Object.keys(queuedProgressSaves).length > 0)
                 progressSaveTimer.restart()
-                return
-            }
-            lastSavedReadingProgress = highestReadingProgress
-            backend.saveReadingProgress(id, highestReadingProgress)
+            return
         }
+        progressSaveTimer.restart()
+    }
+
+    function maybeCloseAfterProgressSave() {
+        if (!backend.busy && !backend.progressBusy && pendingCloseAfterProgress
+            && Object.keys(queuedProgressSaves).length === 0) {
+            pendingCloseAfterProgress = false
+            allowWindowClose = true
+            window.close()
+        }
+    }
+
+    function restoreReadingPosition() {
+        if (!pendingProgressRestore || !reading || !backend.selectedContent
+            || progressDocumentId !== selectedDocument().id || !articleText.height)
+            return
+        const id = progressDocumentId
+        if (restoredProgressDocumentId === id)
+            return
+        Qt.callLater(function() {
+            if (!pendingProgressRestore || !reading || progressDocumentId !== id
+                || selectedDocument().id !== id || !articleText.height)
+                return
+            const range = Math.max(0, articleFlickable.contentHeight - articleFlickable.height)
+            const progress = theme.readerStyle.progressMode === "furthest_position"
+                ? highestReadingProgress : currentReadingProgress
+            articleFlickable.contentY = range * Math.max(0, Math.min(100, progress)) / 100
+            restoredProgressDocumentId = id
+            pendingProgressRestore = false
+        })
     }
 
     function scrollToHeading(position) {
@@ -205,14 +278,44 @@ ApplicationWindow {
         }
     }
 
-    function copySelectedArticleMarkdown() {
+    function selectedArticleMetadata() {
         const metadata = Object.assign({}, selectedDocument())
         metadata.id = metadata.id || selectedDocument().document_id || ""
         metadata.title = backend.selectedTitle || metadata.title || ""
         metadata.author = backend.selectedAuthor || metadata.author || ""
         metadata.url = backend.selectedUrl || metadata.url || metadata.source_url || ""
         metadata.tags = backend.selectedTags.length > 0 ? backend.selectedTags : documentTags(metadata)
-        backend.copyArticleMarkdown(backend.selectedContent, metadata)
+        return metadata
+    }
+
+    function copySelectedArticleMarkdown() {
+        backend.copyArticleMarkdown(backend.selectedContent, selectedArticleMetadata())
+    }
+
+    function openSelectedArticleInEditor(editorId) {
+        backend.openArticleInEditor(editorId, backend.selectedContent, selectedArticleMetadata())
+    }
+
+    function originalDocumentUrl() {
+        const doc = selectedDocument()
+        return doc.source_url || doc.sourceUrl || ""
+    }
+
+    function resetReadingProgress() {
+        const id = progressDocumentId || selectedDocument().id || ""
+        if (!id)
+            return
+        progressSaveTimer.stop()
+        const queued = Object.assign({}, queuedProgressSaves)
+        delete queued[id]
+        queuedProgressSaves = queued
+        highestReadingProgress = 0
+        currentReadingProgress = 0
+        lastSavedReadingProgress = 0
+        pendingProgressRestore = false
+        restoredProgressDocumentId = id
+        articleFlickable.contentY = 0
+        backend.saveReadingProgress(id, 0)
     }
 
     function moveArticleParagraph(direction) {
@@ -341,8 +444,20 @@ ApplicationWindow {
             fontSizePx: 12,
             lineSpacing: 1.2,
             paragraphSpacingPt: 18,
-            contentWidth: 760
+            contentWidth: 760,
+            progressMode: "last_position",
+            externalEditors: ["neovim", "vscode", "obsidian"]
         })
+    }
+
+    function setExternalEditorEnabled(editorId, enabled) {
+        const editors = theme.readerStyle.externalEditors.slice()
+        const index = editors.indexOf(editorId)
+        if (enabled && index < 0)
+            editors.push(editorId)
+        else if (!enabled && index >= 0)
+            editors.splice(index, 1)
+        updateReaderStyle("externalEditors", editors)
     }
 
     Shortcut { sequence: "Ctrl+K"; context: Qt.ApplicationShortcut; onActivated: showPalette = true }
@@ -410,6 +525,12 @@ ApplicationWindow {
         function onBusyChanged() {
             if (!backend.busy && pendingInspection)
                 scheduleSelectedDocumentInspection()
+            if (!backend.busy && Object.keys(queuedProgressSaves).length > 0)
+                progressSaveTimer.restart()
+            maybeCloseAfterProgressSave()
+        }
+        function onProgressBusyChanged() {
+            maybeCloseAfterProgressSave()
         }
         function onLocationChanged() {
             for (let i = 0; i < navList.model.length; i++) {
@@ -455,6 +576,7 @@ ApplicationWindow {
                 anchors.margins: 17
                 spacing: 17
                 RowLayout {
+                    visible: !reading
                     spacing: 10
                     Image { source: "qrc:/assets/omawise-mark.svg"; sourceSize.width: 36; sourceSize.height: 36; width: 36; height: 36; smooth: false }
                     Text { text: qsTr("Omawise"); color: "#f0f1ed"; font.family: theme.uiFont; font.pixelSize: 18; font.weight: Font.DemiBold }
@@ -611,11 +733,11 @@ ApplicationWindow {
                         }
                     }
                 }
-                Item { Layout.fillHeight: true }
-                Rectangle { Layout.fillWidth: true; height: 1; color: "#34373c" }
-                Text { text: reading ? qsTr("↑/↓ paragraph · H highlight · select with Shift+Arrow") : qsTr("j/k move · Enter open · Tab changes pane · ? shortcuts"); color: "#93978f"; font.family: theme.uiFont; font.pixelSize: 9; wrapMode: Text.Wrap; Layout.fillWidth: true }
+                Item { visible: !reading; Layout.fillHeight: !reading }
+                Rectangle { visible: !reading; Layout.fillWidth: true; height: 1; color: "#34373c" }
+                Text { visible: !reading; text: qsTr("j/k move · Enter open · Tab changes pane · ? shortcuts"); color: "#93978f"; font.family: theme.uiFont; font.pixelSize: 9; wrapMode: Text.Wrap; Layout.fillWidth: true }
                 Rectangle {
-                    visible: backend.apiTokenReady && !backend.apiTokenAvailable
+                    visible: !reading && backend.apiTokenReady && !backend.apiTokenAvailable
                     Layout.fillWidth: true
                     implicitHeight: apiConnectPrompt.implicitHeight + 18
                     color: "#272a2f"
@@ -645,7 +767,7 @@ ApplicationWindow {
                     }
                 }
                 Rectangle {
-                    visible: backend.authenticationRequired
+                    visible: !reading && backend.authenticationRequired
                     Layout.fillWidth: true
                     implicitHeight: authPrompt.implicitHeight + 18
                     color: "#272a2f"
@@ -658,6 +780,39 @@ ApplicationWindow {
                         spacing: 7
                         Text { text: qsTr("Readwise sign-in required"); color: "#e4dfce"; font.family: theme.uiFont; font.pixelSize: 10; wrapMode: Text.Wrap; Layout.fillWidth: true }
                         Button { Material.roundedScale: Material.NotRounded; font.family: theme.uiFont; text: qsTr("Sign in"); objectName: "authSignInButton"; Layout.fillWidth: true; enabled: !backend.busy; onClicked: backend.login() }
+                    }
+                }
+                RowLayout {
+                    objectName: "navigationAccountActions"
+                    visible: !reading
+                    Layout.fillWidth: true
+                    spacing: 2
+                    ToolButton {
+                        objectName: "readwiseProfileButton"
+                        text: "◉"
+                        Accessible.name: qsTr("Readwise profile")
+                        ToolTip.visible: hovered
+                        ToolTip.text: qsTr("Readwise profile")
+                        Layout.fillWidth: true
+                        onClicked: backend.openExternalUrl("https://read.readwise.io/profile")
+                    }
+                    ToolButton {
+                        objectName: "readwiseSettingsButton"
+                        text: "⚙"
+                        Accessible.name: qsTr("Readwise settings")
+                        ToolTip.visible: hovered
+                        ToolTip.text: qsTr("Readwise settings")
+                        Layout.fillWidth: true
+                        onClicked: backend.openExternalUrl("https://read.readwise.io/preferences")
+                    }
+                    ToolButton {
+                        objectName: "localSettingsButton"
+                        text: "☷"
+                        Accessible.name: qsTr("Omawise settings")
+                        ToolTip.visible: hovered
+                        ToolTip.text: qsTr("Omawise settings")
+                        Layout.fillWidth: true
+                        onClicked: appearanceDialog.open()
                     }
                 }
             }
@@ -939,7 +1094,12 @@ ApplicationWindow {
                         contentHeight: Math.max(articleText.y + articleText.height + 24, height)
                         clip: true
                         boundsBehavior: Flickable.StopAtBounds
-                        onContentYChanged: progressSaveTimer.restart()
+                        onContentYChanged: {
+                            if (reading && !pendingProgressRestore)
+                                progressSaveTimer.restart()
+                            restoreReadingPosition()
+                        }
+                        onContentHeightChanged: restoreReadingPosition()
                         TextEdit {
                             id: articleText
                             objectName: "articleText"
@@ -983,28 +1143,43 @@ ApplicationWindow {
                     }
                     Timer {
                         id: progressSaveTimer
-                        interval: 1200
+                        interval: 3500
                         repeat: false
                         onTriggered: {
-                            const range = Math.max(1, articleFlickable.contentHeight - articleFlickable.height)
-                            const current = Math.min(100, Math.max(0, Math.round(articleFlickable.contentY / range * 100)))
-                            const next = Math.max(highestReadingProgress, current)
-                            const shouldSave = reading
-                                ? next >= lastSavedReadingProgress + 5
-                                : next > lastSavedReadingProgress
-                            if (shouldSave && !backend.busy) {
-                                highestReadingProgress = next
-                                lastSavedReadingProgress = next
-                                backend.saveReadingProgress(selectedDocument().id || "", next)
-                            } else if (shouldSave && backend.busy) {
+                            if (backend.busy) {
                                 restart()
+                                return
                             }
+                            const queuedIds = Object.keys(queuedProgressSaves)
+                            if (queuedIds.length > 0) {
+                                const queuedId = queuedIds[0]
+                                const queuedValue = queuedProgressSaves[queuedId]
+                                const queued = Object.assign({}, queuedProgressSaves)
+                                delete queued[queuedId]
+                                queuedProgressSaves = queued
+                                backend.saveReadingProgress(queuedId, queuedValue)
+                                if (queuedId === progressDocumentId)
+                                    lastSavedReadingProgress = queuedValue
+                                if (Object.keys(queuedProgressSaves).length > 0)
+                                    restart()
+                                return
+                            }
+                            const range = Math.max(1, articleFlickable.contentHeight - articleFlickable.height)
+                            currentReadingProgress = Math.min(100, Math.max(0, Math.round(articleFlickable.contentY / range * 100)))
+                            highestReadingProgress = Math.max(highestReadingProgress, currentReadingProgress)
+                            const furthest = theme.readerStyle.progressMode === "furthest_position"
+                            const next = furthest ? highestReadingProgress : currentReadingProgress
+                            const shouldSave = furthest
+                                ? next >= lastSavedReadingProgress + 5
+                                : next !== lastSavedReadingProgress
+                            if (reading && shouldSave)
+                                queueProgressSave(progressDocumentId || selectedDocument().id || "", next, true)
                         }
                     }
                     Connections {
                         target: backend
                         function onSelectedDocumentChanged() {
-                            articleFlickable.contentY = 0
+                            restoreReadingPosition()
                             activeParagraphIndex = -1
                             keyboardSelectionAnchor = -1
                             keyboardSelectionCursor = -1
@@ -1386,11 +1561,11 @@ ApplicationWindow {
         Material.roundedScale: Material.NotRounded
         id: appearanceDialog
         objectName: "readerAppearanceDialog"
-        title: qsTr("Reader appearance")
+        title: qsTr("Omawise settings")
         modal: true
         anchors.centerIn: Overlay.overlay
         width: Math.min(560, window.width - 48)
-        height: Math.min(480, window.height - 48)
+        height: Math.min(590, window.height - 48)
         padding: 16
         standardButtons: Dialog.NoButton
         background: Rectangle {
@@ -1486,6 +1661,47 @@ ApplicationWindow {
                     editable: true
                     onValueModified: updateReaderStyle("contentWidth", value)
                 }
+                Label { text: qsTr("Progress behavior"); font.family: theme.uiFont; Layout.minimumWidth: 120; wrapMode: Text.Wrap }
+                ComboBox {
+                    id: progressModePicker
+                    objectName: "readingProgressModePicker"
+                    Material.roundedScale: Material.NotRounded
+                    Layout.fillWidth: true
+                    Layout.minimumWidth: 220
+                    Layout.preferredHeight: 44
+                    model: [qsTr("Last position"), qsTr("Furthest position")]
+                    currentIndex: theme.readerStyle.progressMode === "furthest_position" ? 1 : 0
+                    onActivated: updateReaderStyle("progressMode", index === 1 ? "furthest_position" : "last_position")
+                }
+            }
+            Label {
+                Layout.fillWidth: true
+                text: qsTr("External editors")
+                color: "#e4e5e0"
+                font.family: theme.uiFont
+                font.pixelSize: 13
+                font.weight: Font.DemiBold
+            }
+            Label {
+                Layout.fillWidth: true
+                wrapMode: Text.Wrap
+                text: qsTr("Choose which installed editors appear under Open in… . Editors that are not installed stay configured but are hidden from the menu.")
+                color: "#858a83"
+                font.family: theme.uiFont
+                font.pixelSize: 10
+            }
+            Repeater {
+                model: backend.externalEditorOptions()
+                delegate: CheckBox {
+                    required property var modelData
+                    objectName: "externalEditor_" + modelData.id
+                    Layout.fillWidth: true
+                    text: modelData.installed
+                          ? modelData.label
+                          : qsTr("%1 (not installed)").arg(modelData.label)
+                    checked: theme.readerStyle.externalEditors.indexOf(modelData.id) >= 0
+                    onToggled: setExternalEditorEnabled(modelData.id, checked)
+                }
             }
             Label {
                 Layout.fillWidth: true
@@ -1546,6 +1762,25 @@ ApplicationWindow {
             enabled: backend.selectedContent.length > 0
             onTriggered: copySelectedArticleMarkdown()
         }
+        MenuItem {
+            text: qsTr("Reset reading progress")
+            objectName: "resetReadingProgressButton"
+            enabled: !!selectedDocument().id && Math.max(Number(selectedDocument().reading_progress || 0),
+                currentReadingProgress, highestReadingProgress) > 0
+            onTriggered: resetReadingProgress()
+        }
+        MenuItem {
+            text: qsTr("Open original")
+            objectName: "openOriginalArticleButton"
+            enabled: originalDocumentUrl().length > 0
+            onTriggered: backend.openExternalUrl(originalDocumentUrl())
+        }
+        MenuItem {
+            text: qsTr("Copy document URL")
+            objectName: "copyOriginalDocumentUrlButton"
+            enabled: originalDocumentUrl().length > 0
+            onTriggered: backend.copyDocumentUrl(originalDocumentUrl())
+        }
         MenuSeparator {}
         MenuItem {
             text: qsTr("Highlight selection")
@@ -1555,10 +1790,24 @@ ApplicationWindow {
             onTriggered: createSelectedHighlight()
         }
         MenuSeparator {}
-        MenuItem {
-            text: qsTr("Open in Reader")
-            enabled: backend.selectedUrl.length > 0
-            onTriggered: Qt.openUrlExternally(backend.selectedUrl)
+        Menu {
+            title: qsTr("Open in…")
+            objectName: "openArticleInMenu"
+            width: 280
+            MenuItem {
+                text: qsTr("Open in Reader")
+                enabled: backend.selectedUrl.length > 0
+                onTriggered: Qt.openUrlExternally(backend.selectedUrl)
+            }
+            MenuSeparator {}
+            Repeater {
+                model: backend.availableExternalEditors(theme.readerStyle.externalEditors)
+                delegate: MenuItem {
+                    required property var modelData
+                    text: qsTr("Open in %1").arg(modelData.label)
+                    onTriggered: openSelectedArticleInEditor(modelData.id)
+                }
+            }
         }
     }
 

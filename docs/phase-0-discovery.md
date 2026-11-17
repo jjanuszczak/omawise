@@ -20,7 +20,7 @@
 | Read document | Details command returns Markdown | List can include `html_content`; details and content fields documented | Supported, but compare detail fidelity/types and body size. Don't request full bodies in list views. |
 | Save URL | `reader-create-document` | `POST /api/v3/save/` | Supported. |
 | Move / archive / shortlist | Move documents; bulk metadata edit | Update and bulk update | Supported. Bulk operations have rate limits and per-item errors to handle. |
-| Seen state and progress | Bulk metadata edit includes seen and metadata | Update/bulk update include seen and `reading_progress`; progress not supported for PDFs | Supported with PDF progress limitation. |
+| Seen state and progress | Bulk metadata edit includes seen and metadata | Update/bulk update include seen and fractional `reading_progress` from 0 to 1; progress not supported for PDFs | Supported with UI percentages converted to the API's fractional scale; PDF progress remains unsupported. |
 | Tags | Add/remove tags on documents and highlights | Tag list and document/highlight tag updates | Supported. Verify replace-vs-append semantics for each operation. |
 | Document notes | Bulk metadata edit | Update endpoint supports notes | Supported, with distinct document-note and highlight-note semantics. |
 | Highlights | List/get, create, tag, set notes | Highlights appear as child documents; save creates; update/delete endpoints supported | Core operations are now documented. Exact text matching and API anchoring need an integration spike, especially for EPUB/PDF. |
@@ -37,7 +37,7 @@ Read-only local inspection only; no account command or credential file was acces
 
 ### Integration decision for the next phase
 
-Phase 1 began with the **CLI adapter** for the first vertical slice: fixed command allowlist, asynchronous `QProcess`, JSON mode, no shell, and no secrets in arguments. A five-run account benchmark found direct API list/detail reads materially faster (about 0.45–0.75 s versus 2.4–3.1 s through the CLI). Omawise now supports an optional direct API token, validated through the documented auth endpoint and stored in Secret Service with libsecret. Direct API list/detail reads use `QNetworkAccessManager`; search and annotation/write features remain CLI-backed where API equivalents have not been implemented. Never read private CLI config files.
+Phase 1 began with the **CLI adapter** for the first vertical slice: fixed command allowlist, asynchronous `QProcess`, JSON mode, no shell, and no secrets in arguments. A five-run account benchmark found direct API list/detail reads materially faster (about 0.45–0.75 s versus 2.4–3.1 s through the CLI). Omawise now supports an optional direct API token, validated through the documented auth endpoint and stored in Secret Service with libsecret. Direct API list/detail reads and independent asynchronous progress writes use `QNetworkAccessManager`; search and other annotation/write features remain CLI-backed where API equivalents have not been implemented. Never read private CLI config files.
 
 ## UX prototype
 

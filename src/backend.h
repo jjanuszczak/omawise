@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QByteArray>
 #include <QProcess>
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
@@ -18,6 +19,7 @@ class Backend : public QObject {
     Q_PROPERTY(QVariantList documents READ documents NOTIFY documentsChanged)
     Q_PROPERTY(bool hasMoreDocuments READ hasMoreDocuments NOTIFY hasMoreDocumentsChanged)
     Q_PROPERTY(bool busy READ busy NOTIFY busyChanged)
+    Q_PROPERTY(bool progressBusy READ progressBusy NOTIFY progressBusyChanged)
     Q_PROPERTY(bool metadataBusy READ metadataBusy NOTIFY metadataBusyChanged)
     Q_PROPERTY(QString error READ error NOTIFY errorChanged)
     Q_PROPERTY(bool authenticationRequired READ authenticationRequired NOTIFY authenticationRequiredChanged)
@@ -45,6 +47,7 @@ public:
     QVariantList documents() const { return m_documents; }
     bool hasMoreDocuments() const { return !m_nextCursor.isEmpty(); }
     bool busy() const { return m_busy; }
+    bool progressBusy() const { return m_progressBusy; }
     bool metadataBusy() const { return m_metadataBusy; }
     QString error() const { return m_error; }
     bool authenticationRequired() const { return m_authenticationRequired; }
@@ -93,14 +96,20 @@ public:
     Q_INVOKABLE void clearError();
     Q_INVOKABLE void clearArticleCache();
     Q_INVOKABLE bool openExternalUrl(const QString &url);
+    Q_INVOKABLE QVariantList externalEditorOptions() const;
+    Q_INVOKABLE QVariantList availableExternalEditors(const QStringList &configured) const;
+    Q_INVOKABLE bool openArticleInEditor(const QString &editorId, const QString &content,
+                                         const QVariantMap &metadata);
     Q_INVOKABLE QString formattedMarkdown(const QString &markdown, const QString &accent,
                                           const QVariantMap &readerStyle = {}) const;
     Q_INVOKABLE bool copyArticleMarkdown(const QString &content, const QVariantMap &metadata);
+    Q_INVOKABLE bool copyDocumentUrl(const QString &url);
 
 signals:
     void documentsChanged();
     void hasMoreDocumentsChanged();
     void busyChanged();
+    void progressBusyChanged();
     void metadataBusyChanged();
     void errorChanged();
     void authenticationRequiredChanged();
@@ -114,10 +123,15 @@ signals:
     void locationChanged();
 
 private:
-    enum class Operation { None, List, ListMore, Search, TitleSearch, Detail, ApiDetail, ValidateApiToken, Highlights, Archive, Move, SaveUrl, SetSeen, SaveProgress, SaveNote, SaveTags, CreateHighlight, SaveHighlightNote, AddHighlightTags, RemoveHighlightTags, Login };
+    enum class Operation { None, List, ListMore, Search, TitleSearch, Detail, ApiDetail, ValidateApiToken, Highlights, Archive, Move, SaveUrl, SetSeen, SaveNote, SaveTags, CreateHighlight, SaveHighlightNote, AddHighlightTags, RemoveHighlightTags, Login };
     enum class PendingHighlightEdit { None, SaveNote, AddTags, RemoveTags };
     void run(const QStringList &arguments, Operation operation);
     void runApiGet(const QUrl &url, Operation operation, const QString &token = {});
+    void queueProgressWrite(const QString &id, int progress);
+    void startNextProgressWrite();
+    void completeProgressWrite(const QString &id, int progress, const QByteArray &response,
+                               const QString &failure = {});
+    void setProgressBusy(bool busy);
     void handleApiReply(QNetworkReply *reply);
     void loadApiTokenFromKeyring();
     void storeApiTokenInKeyring(const QString &token);
@@ -146,17 +160,24 @@ private:
     static QVariantList resultRows(const QJsonDocument &document);
     static QVariantList highlightRows(const QJsonDocument &document);
     static QJsonObject unwrapObject(const QJsonDocument &document);
+    QString articleMarkdown(const QString &content, const QVariantMap &metadata) const;
+    QString writeEditorMarkdownFile(const QString &markdown, const QVariantMap &metadata) const;
 
     QProcess m_process;
+    QProcess m_progressProcess;
     QProcess m_documentTagsProcess;
     QNetworkAccessManager m_network;
     QNetworkReply *m_apiReply = nullptr;
+    QNetworkReply *m_progressReply = nullptr;
     QTimer m_timeout;
+    QTimer m_progressTimeout;
     Operation m_operation = Operation::None;
     QVariantList m_documents;
     QVariantList m_libraryDocuments;
     QVariantList m_localSearchMatches;
     bool m_busy = false;
+    bool m_progressBusy = false;
+    bool m_progressTimedOut = false;
     bool m_metadataBusy = false;
     bool m_timedOut = false;
     bool m_authenticationRequired = false;
@@ -184,7 +205,9 @@ private:
     QString m_pendingId;
     QString m_pendingUrl;
     bool m_pendingSeen = false;
-    int m_pendingProgress = 0;
+    QHash<QString, int> m_queuedProgressWrites;
+    QString m_activeProgressId;
+    int m_activeProgress = 0;
     QString m_queuedHighlightId;
     bool m_hasQueuedOpen = false;
     bool m_documentTagsLoaded = false;

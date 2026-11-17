@@ -36,6 +36,7 @@ private slots:
     void listPaginationAppendsAndDeduplicates();
     void searchMergesLocalAndRemoteResults();
     void moveDocumentUsesSupportedLocationCommand();
+    void readingProgressUsesReaderFractionScale();
     void authenticationErrorsAreDetectedAndClearedOnRetry();
     void documentNoteUsesBulkMetadataCommand();
     void documentNoteReportsPerItemFailure();
@@ -77,7 +78,7 @@ void BackendTests::initTestCase() {
               "  *--title-search*) printf '%s\\n' '{\"results\":[{\"document_id\":\"title-only\",\"title\":\"Title-only result\"}]}' ;;\n"
               "  *reader-search-documents*) printf '%s\\n' '{\"results\":[{\"id\":\"remote\",\"title\":\"Remote result\"}]}' ;;\n"
               "  *--page-cursor*) if [ \"$OMAWISE_PAGINATION_TEST\" = 1 ]; then printf '%s\\n' '{\"results\":[{\"id\":\"second\",\"title\":\"Second page\"},{\"id\":\"local\",\"title\":\"Duplicate row\"}],\"nextPageCursor\":null}' ; else printf '%s\\n' '{\"results\":[]}' ; fi ;;\n"
-              "  *reader-list-documents*) if [ \"$OMAWISE_AUTH_FAILURE\" = 1 ]; then printf '%s\\n' '401 Unauthorized' >&2; exit 1; elif [ \"$OMAWISE_PAGINATION_TEST\" = 1 ]; then printf '%s\\n' '{\"results\":[{\"id\":\"local\",\"title\":\"Local article\",\"author\":\"A. Writer\"}],\"nextPageCursor\":\"cursor-1\"}' ; else printf '%s\\n' '{\"results\":[{\"id\":\"local\",\"title\":\"Local article\",\"author\":\"A. Writer\"}]}' ; fi ;;\n"
+              "  *reader-list-documents*) if [ \"$OMAWISE_AUTH_FAILURE\" = 1 ]; then printf '%s\\n' '401 Unauthorized' >&2; exit 1; elif [ \"$OMAWISE_PROGRESS_FIXTURE\" = 1 ]; then printf '%s\\n' '{\"results\":[{\"id\":\"local\",\"title\":\"Local article\",\"author\":\"A. Writer\",\"reading_progress\":0.37}]}' ; elif [ \"$OMAWISE_PAGINATION_TEST\" = 1 ]; then printf '%s\\n' '{\"results\":[{\"id\":\"local\",\"title\":\"Local article\",\"author\":\"A. Writer\"}],\"nextPageCursor\":\"cursor-1\"}' ; else printf '%s\\n' '{\"results\":[{\"id\":\"local\",\"title\":\"Local article\",\"author\":\"A. Writer\"}]}' ; fi ;;\n"
               "  *reader-get-document-details*) if [ \"$OMAWISE_DETAIL_FAIL\" = 1 ]; then printf '%s\\n' 'temporary detail failure' >&2; exit 1; elif [ \"$OMAWISE_DETAIL_DELAY\" = 1 ]; then sleep 1; fi; if [ \"$OMAWISE_DETAIL_JSON_STRING\" = 1 ]; then printf '%s\\n' '\"# JSON article\\n\\nBody paragraph.\"' ; elif [ \"$OMAWISE_FORMATTING_FIXTURE\" = 1 ]; then printf '%s\\n' '# Article' '' '## Section heading' '' 'First paragraph for selection with several lines of text to check readable measure and line spacing.' '' 'Second paragraph for keyboard navigation.' '' '> A useful blockquote for the article preview.' '' '- First list item' '- Second list item' '' '`inline code` and [a sample link](https://example.com).' '' '```cpp' 'int answer = 42;' '```' ; else printf '%s\\n' '# Article' '' 'First paragraph for selection.' '' 'Second paragraph for keyboard navigation.' ; fi ;;\n"
               "  *reader-set-highlight-notes*) printf '%s\\n' '{\"success\":true}' ;;\n"
               "  *reader-add-tags-to-highlight*) printf '%s\\n' '{\"success\":true}' ;;\n"
@@ -136,6 +137,22 @@ void BackendTests::listPaginationAppendsAndDeduplicates() {
     QVERIFY(log.open(QIODevice::ReadOnly | QIODevice::Text));
     QVERIFY(log.readAll().contains("reader-list-documents --location new --limit 50 --page-cursor cursor-1"));
     qunsetenv("OMAWISE_PAGINATION_TEST");
+}
+
+void BackendTests::readingProgressUsesReaderFractionScale() {
+    qputenv("OMAWISE_PROGRESS_FIXTURE", "1");
+    Backend backend;
+    backend.refresh();
+    QTRY_VERIFY_WITH_TIMEOUT(!backend.busy(), 3000);
+    QCOMPARE(backend.documents().first().toMap().value("reading_progress").toInt(), 37);
+
+    backend.saveReadingProgress("doc-42", 42);
+    QTRY_VERIFY_WITH_TIMEOUT(!backend.progressBusy(), 3000);
+    QFile log(m_logPath);
+    QVERIFY(log.open(QIODevice::ReadOnly | QIODevice::Text));
+    QVERIFY(log.readAll().contains(
+        "reader-bulk-edit-document-metadata --documents [{\"document_id\":\"doc-42\",\"reading_progress\":0.42}]"));
+    qunsetenv("OMAWISE_PROGRESS_FIXTURE");
 }
 
 void BackendTests::searchMergesLocalAndRemoteResults() {
@@ -281,10 +298,12 @@ void BackendTests::copyArticleMarkdownAddsYamlFrontmatter() {
     QVERIFY(copied.contains("tags:\n  - \"research\"\n  - \"long tag\""));
     QVERIFY(copied.endsWith("# Article\n\nBody paragraph.\n"));
 
-    QVERIFY(backend.copyArticleMarkdown("<h1>HTML title</h1><p>HTML body.</p>", metadata));
+    QVERIFY(backend.copyArticleMarkdown("<h1>HTML title</h1><p>HTML body.</p><p><code>inline code</code></p>", metadata));
     copied = QGuiApplication::clipboard()->text();
     QVERIFY(copied.contains("# HTML title"));
     QVERIFY(copied.contains("HTML body."));
+    QVERIFY(!copied.contains("`HTML body.`"));
+    QVERIFY(copied.contains("`inline code`"));
 }
 
 void BackendTests::readerStyleUsesDefaultsAndReloadsBoundedToml() {
@@ -298,6 +317,9 @@ void BackendTests::readerStyleUsesDefaultsAndReloadsBoundedToml() {
     QCOMPARE(theme.readerStyle().value("lineSpacing").toDouble(), 1.2);
     QCOMPARE(theme.readerStyle().value("paragraphSpacingPt").toInt(), 18);
     QCOMPARE(theme.readerStyle().value("contentWidth").toInt(), 760);
+    QCOMPARE(theme.readerStyle().value("progressMode").toString(), QStringLiteral("last_position"));
+    QCOMPARE(theme.readerStyle().value("externalEditors").toStringList(),
+             QStringList({"neovim", "vscode", "obsidian"}));
 
     QVERIFY(QDir().mkpath(configDirectory));
     QFile settings(configDirectory + QStringLiteral("/reader.toml"));
@@ -307,6 +329,8 @@ void BackendTests::readerStyleUsesDefaultsAndReloadsBoundedToml() {
     editedStyle["lineSpacing"] = 1.6;
     editedStyle["paragraphSpacingPt"] = 24;
     editedStyle["contentWidth"] = 920;
+    editedStyle["progressMode"] = QStringLiteral("furthest_position");
+    editedStyle["externalEditors"] = QStringList({"vscode", "obsidian"});
     QVERIFY(theme.saveReaderStyle(editedStyle));
     QTRY_COMPARE_WITH_TIMEOUT(theme.readerStyle().value("fontSizePx").toInt(), 16, 1500);
     QVERIFY(settings.open(QIODevice::ReadOnly | QIODevice::Text));
@@ -317,6 +341,10 @@ void BackendTests::readerStyleUsesDefaultsAndReloadsBoundedToml() {
     QVERIFY(savedSettings.contains("line_spacing = 1.6"));
     QVERIFY(savedSettings.contains("paragraph_spacing_pt = 24"));
     QVERIFY(savedSettings.contains("content_width = 920"));
+    QVERIFY(savedSettings.contains("progress_mode = \"furthest_position\""));
+    QVERIFY(savedSettings.contains("external_editors = [\"vscode\", \"obsidian\"]"));
+    QCOMPARE(theme.readerStyle().value("externalEditors").toStringList(),
+             QStringList({"vscode", "obsidian"}));
 
     QVERIFY(settings.open(QIODevice::WriteOnly | QIODevice::Text | QIODevice::Truncate));
     settings.write("[reader]\nfont_family = \"Atkinson Hyperlegible\"\nfont_size_px = 200\nline_spacing = 1.7\ncontent_width = 1300\n");
@@ -325,6 +353,7 @@ void BackendTests::readerStyleUsesDefaultsAndReloadsBoundedToml() {
     QCOMPARE(theme.readerStyle().value("fontFamily").toString(), QStringLiteral("Atkinson Hyperlegible"));
     QCOMPARE(theme.readerStyle().value("lineSpacing").toDouble(), 1.7);
     QCOMPARE(theme.readerStyle().value("contentWidth").toInt(), 1200);
+    QCOMPARE(theme.readerStyle().value("progressMode").toString(), QStringLiteral("last_position"));
 
     QVERIFY(settings.open(QIODevice::WriteOnly | QIODevice::Text | QIODevice::Truncate));
     settings.write("[reader]\nfont_size_px = invalid\nline_spacing = 0\n");
@@ -614,6 +643,7 @@ void BackendTests::qmlSearchActivationAndReaderSelection() {
     QVERIFY(window->findChild<QObject *>(QStringLiteral("readerLineSpacingPicker")));
     QVERIFY(window->findChild<QObject *>(QStringLiteral("readerParagraphSpacingPicker")));
     QVERIFY(window->findChild<QObject *>(QStringLiteral("readerContentWidthPicker")));
+    QVERIFY(window->findChild<QObject *>(QStringLiteral("readingProgressModePicker")));
     QObject *appearanceClose = window->findChild<QObject *>(QStringLiteral("readerAppearanceCloseButton"));
     QVERIFY(appearanceClose);
     QVERIFY(clickObject(appearanceClose));
@@ -655,6 +685,7 @@ void BackendTests::qmlSearchActivationAndReaderSelection() {
     QObject *moreMenu = window->findChild<QObject *>(QStringLiteral("articleMoreMenu"));
     QVERIFY(moreMenu);
     QVERIFY(moreMenu->property("visible").toBool());
+    QVERIFY(window->findChild<QObject *>(QStringLiteral("openArticleInMenu")));
     QVERIFY(moreMenu->property("y").toReal() >= moreButton->height());
     QObject *copyMarkdownButton = window->findChild<QObject *>(QStringLiteral("copyArticleMarkdownButton"));
     QVERIFY(copyMarkdownButton);

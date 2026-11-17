@@ -10,6 +10,7 @@
 #include <QPalette>
 #include <QStandardPaths>
 #include <QRegularExpression>
+#include <QSet>
 #include <QSaveFile>
 #include <QLocale>
 #include <cmath>
@@ -19,7 +20,8 @@ Theme::Theme(QObject *parent)
       m_configDirectory(QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation) + "/omawise"),
       m_configFile(m_configDirectory + "/reader.toml") {
     m_readerStyle = {{"fontFamily", "monospace"}, {"fontSizePx", 12}, {"lineSpacing", 1.2},
-                     {"paragraphSpacingPt", 18}, {"contentWidth", 760}};
+                     {"paragraphSpacingPt", 18}, {"contentWidth", 760}, {"progressMode", "last_position"},
+                     {"externalEditors", QStringList{"neovim", "vscode", "obsidian"}}};
     m_debounce.setSingleShot(true);
     m_debounce.setInterval(80);
     connect(&m_watcher, &QFileSystemWatcher::directoryChanged, &m_debounce, qOverload<>(&QTimer::start));
@@ -67,12 +69,13 @@ Theme::Theme(QObject *parent)
 
 void Theme::reloadReaderStyle() {
     QVariantMap style{{"fontFamily", "monospace"}, {"fontSizePx", 12}, {"lineSpacing", 1.2},
-                      {"paragraphSpacingPt", 18}, {"contentWidth", 760}};
+                      {"paragraphSpacingPt", 18}, {"contentWidth", 760}, {"progressMode", "last_position"},
+                      {"externalEditors", QStringList{"neovim", "vscode", "obsidian"}}};
     QFile file(m_configFile);
     if (file.open(QIODevice::ReadOnly | QIODevice::Text)) {
         const QString contents = QString::fromUtf8(file.readAll());
         const QRegularExpression keyValue(
-            R"re(^\s*(font_family|font_size_px|line_spacing|paragraph_spacing_pt|content_width)\s*=\s*(?:"([^"]*)"|([^#\s]+)).*$)re",
+            R"re(^\s*(font_family|font_size_px|line_spacing|paragraph_spacing_pt|content_width|progress_mode)\s*=\s*(?:"([^"]*)"|([^#\s]+)).*$)re",
             QRegularExpression::MultilineOption);
         auto matches = keyValue.globalMatch(contents);
         while (matches.hasNext()) {
@@ -84,6 +87,9 @@ void Theme::reloadReaderStyle() {
                 if (!value.isEmpty() && value.size() <= 80
                     && QRegularExpression("^[A-Za-z0-9 _,-]+$").match(value).hasMatch())
                     style["fontFamily"] = value;
+            } else if (key == "progress_mode") {
+                if (value == "last_position" || value == "furthest_position")
+                    style["progressMode"] = value;
             } else {
                 const double number = value.toDouble(&ok);
                 if (!ok || !std::isfinite(number)) continue;
@@ -92,6 +98,23 @@ void Theme::reloadReaderStyle() {
                 else if (key == "paragraph_spacing_pt") style["paragraphSpacingPt"] = qBound(0, qRound(number), 36);
                 else if (key == "content_width") style["contentWidth"] = qBound(480, qRound(number), 1200);
             }
+        }
+        const QRegularExpression editorListExpression(
+            R"re(^\s*external_editors\s*=\s*\[([^\]]*)\].*$)re",
+            QRegularExpression::MultilineOption);
+        const auto editorMatch = editorListExpression.match(contents);
+        if (editorMatch.hasMatch()) {
+            static const QSet<QString> supportedEditors{
+                "neovim", "vscode", "obsidian", "helix", "emacs", "zed", "sublime", "kate", "mousepad"};
+            QStringList editors;
+            const QRegularExpression idExpression(R"re("([A-Za-z0-9_-]+)")re");
+            auto ids = idExpression.globalMatch(editorMatch.captured(1));
+            while (ids.hasNext()) {
+                const QString id = ids.next().captured(1);
+                if (supportedEditors.contains(id) && !editors.contains(id))
+                    editors.append(id);
+            }
+            style["externalEditors"] = editors;
         }
     }
     if (style != m_readerStyle) {
@@ -119,6 +142,17 @@ bool Theme::saveReaderStyle(const QVariantMap &style) {
     const double contentWidth = style.value("contentWidth", updated.value("contentWidth")).toDouble(&ok);
     if (ok && std::isfinite(contentWidth))
         updated["contentWidth"] = qBound(480, qRound(contentWidth), 1200);
+    const QString progressMode = style.value("progressMode", updated.value("progressMode")).toString();
+    if (progressMode == "last_position" || progressMode == "furthest_position")
+        updated["progressMode"] = progressMode;
+    static const QSet<QString> supportedEditors{
+        "neovim", "vscode", "obsidian", "helix", "emacs", "zed", "sublime", "kate", "mousepad"};
+    QStringList editors;
+    for (const QString &id : style.value("externalEditors", updated.value("externalEditors")).toStringList()) {
+        if (supportedEditors.contains(id) && !editors.contains(id))
+            editors.append(id);
+    }
+    updated["externalEditors"] = editors;
 
     if (!QDir().mkpath(m_configDirectory)) {
         m_readerStyleError = tr("Could not create the Omawise settings directory.");
@@ -132,18 +166,27 @@ bool Theme::saveReaderStyle(const QVariantMap &style) {
         return false;
     }
     const QString contents = QStringLiteral(
-        "# Reader typography. Changes apply automatically while Omawise is running.\n"
+        "# Omawise reader and editor settings. Changes apply automatically while Omawise is running.\n"
         "[reader]\n"
         "font_family = \"%1\"\n"
         "font_size_px = %2\n"
         "line_spacing = %3\n"
         "paragraph_spacing_pt = %4\n"
-        "content_width = %5\n")
+        "content_width = %5\n"
+        "progress_mode = \"%6\"\n"
+        "external_editors = [%7]\n")
         .arg(updated.value("fontFamily").toString())
         .arg(updated.value("fontSizePx").toInt())
         .arg(QLocale::c().toString(updated.value("lineSpacing").toDouble(), 'f', 1))
         .arg(updated.value("paragraphSpacingPt").toInt())
-        .arg(updated.value("contentWidth").toInt());
+        .arg(updated.value("contentWidth").toInt())
+        .arg(updated.value("progressMode").toString())
+        .arg([&editors] {
+            QStringList quoted;
+            for (const QString &id : editors)
+                quoted.append(QStringLiteral("\"%1\"").arg(id));
+            return quoted.join(QStringLiteral(", "));
+        }());
     const QByteArray bytes = contents.toUtf8();
     if (file.write(bytes) != bytes.size() || !file.commit()) {
         m_readerStyleError = tr("Could not save reader.toml: %1").arg(file.errorString());
