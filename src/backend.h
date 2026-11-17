@@ -23,6 +23,8 @@ class Backend : public QObject {
     Q_PROPERTY(bool metadataBusy READ metadataBusy NOTIFY metadataBusyChanged)
     Q_PROPERTY(QString error READ error NOTIFY errorChanged)
     Q_PROPERTY(bool authenticationRequired READ authenticationRequired NOTIFY authenticationRequiredChanged)
+    Q_PROPERTY(bool cliConnectionKnown READ cliConnectionKnown NOTIFY cliConnectionStateChanged)
+    Q_PROPERTY(bool cliSignedIn READ cliSignedIn NOTIFY cliConnectionStateChanged)
     Q_PROPERTY(bool apiTokenReady READ apiTokenReady NOTIFY apiTokenStateChanged)
     Q_PROPERTY(bool apiTokenAvailable READ apiTokenAvailable NOTIFY apiTokenStateChanged)
     Q_PROPERTY(bool needsApiToken READ needsApiToken NOTIFY apiTokenStateChanged)
@@ -51,6 +53,8 @@ public:
     bool metadataBusy() const { return m_metadataBusy; }
     QString error() const { return m_error; }
     bool authenticationRequired() const { return m_authenticationRequired; }
+    bool cliConnectionKnown() const { return m_cliConnectionKnown; }
+    bool cliSignedIn() const { return m_cliSignedIn; }
     bool apiTokenReady() const { return m_apiTokenReady; }
     bool apiTokenAvailable() const { return m_apiTokenReady && !m_apiToken.isEmpty() && !m_apiTokenRejected; }
     bool needsApiToken() const { return m_apiTokenReady && m_apiTokenRejected; }
@@ -113,6 +117,7 @@ signals:
     void metadataBusyChanged();
     void errorChanged();
     void authenticationRequiredChanged();
+    void cliConnectionStateChanged();
     void apiTokenStateChanged();
     void apiLoginBusyChanged();
     void apiLoginErrorChanged();
@@ -139,6 +144,7 @@ private:
     void setApiLoginBusy(bool busy);
     void setApiLoginError(const QString &error);
     void setApiTokenRejected(bool rejected);
+    void setCliSignedIn(bool signedIn);
     void finish(int exitCode, QProcess::ExitStatus exitStatus);
     void fail(const QString &message);
     void setBusy(bool busy);
@@ -181,6 +187,8 @@ private:
     bool m_metadataBusy = false;
     bool m_timedOut = false;
     bool m_authenticationRequired = false;
+    bool m_cliConnectionKnown = false;
+    bool m_cliSignedIn = false;
     bool m_apiTokenReady = false;
     bool m_apiTokenRejected = false;
     bool m_apiLoginBusy = false;

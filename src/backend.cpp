@@ -495,6 +495,14 @@ void Backend::setApiTokenRejected(bool rejected) {
     emit apiTokenStateChanged();
 }
 
+void Backend::setCliSignedIn(bool signedIn) {
+    if (m_cliConnectionKnown && m_cliSignedIn == signedIn)
+        return;
+    m_cliConnectionKnown = true;
+    m_cliSignedIn = signedIn;
+    emit cliConnectionStateChanged();
+}
+
 void Backend::loadApiTokenFromKeyring() {
     QPointer<Backend> guard(this);
     QThreadPool::globalInstance()->start([guard] {
@@ -1939,8 +1947,12 @@ void Backend::finish(int exitCode, QProcess::ExitStatus exitStatus) {
             emit documentsChanged();
         }
         fail(standardError.isEmpty() ? tr("Readwise CLI exited with code %1.").arg(exitCode) : standardError);
+        if (m_authenticationRequired)
+            setCliSignedIn(false);
         return;
     }
+
+    setCliSignedIn(true);
 
     if (operation == Operation::Login) {
         clearPersistentReaderCache();
@@ -2008,6 +2020,8 @@ void Backend::finish(int exitCode, QProcess::ExitStatus exitStatus) {
             }
             setStatus(tr("Readwise request failed"));
             fail(error.isEmpty() ? tr("The Readwise CLI returned an error.") : error);
+            if (m_authenticationRequired)
+                setCliSignedIn(false);
             return;
         }
         if ((operation == Operation::SaveNote || operation == Operation::SaveTags

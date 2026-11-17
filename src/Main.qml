@@ -421,6 +421,7 @@ ApplicationWindow {
             if (doc.id) backend.archiveDocument(doc.id)
         } else if (command === "help") showHelp = true
         else if (command === "login") backend.login()
+        else if (command === "account") accountDialog.open()
         else if (command === "connectApi") apiTokenDialog.open()
         else if (command === "forgetApi") backend.forgetApiToken()
         else if (command === "clearCache") backend.clearArticleCache()
@@ -737,7 +738,7 @@ ApplicationWindow {
                 Rectangle { visible: !reading; Layout.fillWidth: true; height: 1; color: "#34373c" }
                 Text { visible: !reading; text: qsTr("j/k move · Enter open · Tab changes pane · ? shortcuts"); color: "#93978f"; font.family: theme.uiFont; font.pixelSize: 9; wrapMode: Text.Wrap; Layout.fillWidth: true }
                 Rectangle {
-                    visible: !reading && backend.apiTokenReady && !backend.apiTokenAvailable
+                    visible: !reading && backend.cliSignedIn && backend.apiTokenReady && !backend.apiTokenAvailable
                     Layout.fillWidth: true
                     implicitHeight: apiConnectPrompt.implicitHeight + 18
                     color: "#272a2f"
@@ -778,8 +779,8 @@ ApplicationWindow {
                         anchors.fill: parent
                         anchors.margins: 9
                         spacing: 7
-                        Text { text: qsTr("Readwise sign-in required"); color: "#e4dfce"; font.family: theme.uiFont; font.pixelSize: 10; wrapMode: Text.Wrap; Layout.fillWidth: true }
-                        Button { Material.roundedScale: Material.NotRounded; font.family: theme.uiFont; text: qsTr("Sign in"); objectName: "authSignInButton"; Layout.fillWidth: true; enabled: !backend.busy; onClicked: backend.login() }
+                        Text { text: qsTr("Connect to Readwise to use search, highlights, and annotation features. Omawise will open your browser for sign-in."); color: "#e4dfce"; font.family: theme.uiFont; font.pixelSize: 10; wrapMode: Text.Wrap; Layout.fillWidth: true }
+                        Button { Material.roundedScale: Material.NotRounded; font.family: theme.uiFont; text: qsTr("Set up Readwise"); objectName: "authSignInButton"; Layout.fillWidth: true; enabled: !backend.busy; onClicked: accountDialog.open() }
                     }
                 }
                 RowLayout {
@@ -787,6 +788,15 @@ ApplicationWindow {
                     visible: !reading
                     Layout.fillWidth: true
                     spacing: 2
+                    ToolButton {
+                        objectName: "accountSettingsButton"
+                        text: "♙"
+                        Accessible.name: qsTr("Readwise account settings")
+                        ToolTip.visible: hovered
+                        ToolTip.text: qsTr("Readwise account")
+                        Layout.fillWidth: true
+                        onClicked: accountDialog.open()
+                    }
                     ToolButton {
                         objectName: "readwiseProfileButton"
                         text: "◉"
@@ -1811,6 +1821,132 @@ ApplicationWindow {
         }
     }
 
+    Dialog {
+        Material.roundedScale: Material.NotRounded
+        id: accountDialog
+        objectName: "readwiseAccountDialog"
+        modal: true
+        anchors.centerIn: Overlay.overlay
+        width: Math.min(560, window.width - 48)
+        padding: 18
+        title: qsTr("Readwise account")
+        standardButtons: Dialog.NoButton
+        background: Rectangle { color: "#25282e"; border.color: "#3a3d43" }
+        contentItem: ColumnLayout {
+            spacing: 16
+            Label {
+                Layout.fillWidth: true
+                wrapMode: Text.Wrap
+                color: "#c5c8c1"
+                font.family: theme.uiFont
+                text: qsTr("The official CLI sign-in enables hybrid search, highlights, and annotations. The optional Reader API token speeds up library and article loading and saves reading progress directly. Without the API token, Omawise uses the CLI for library and article loading too.")
+            }
+            Rectangle { Layout.fillWidth: true; height: 1; color: "#3a3d43" }
+            ColumnLayout {
+                Layout.fillWidth: true
+                spacing: 7
+                Label { text: qsTr("Readwise CLI"); color: "#e4e5e0"; font.family: theme.uiFont; font.pixelSize: 14; font.weight: Font.DemiBold }
+                Label {
+                    objectName: "cliAccountStatus"
+                    Layout.fillWidth: true
+                    wrapMode: Text.Wrap
+                    color: backend.authenticationRequired ? "#ffb4ab" : "#b7bbb3"
+                    font.family: theme.uiFont
+                    text: backend.authenticationRequired
+                          ? qsTr("Sign-in required. Continue to Readwise in your browser to connect.")
+                          : backend.cliSignedIn
+                            ? qsTr("Connected. Omawise uses this sign-in for search, highlights, and annotation features.")
+                            : backend.cliConnectionKnown
+                              ? qsTr("The CLI connection needs attention. Sign in again to reconnect.")
+                              : qsTr("Not connected yet. Sign in to enable search, highlights, and annotation features.")
+                }
+                Label {
+                    visible: backend.error.length > 0
+                    Layout.fillWidth: true
+                    wrapMode: Text.Wrap
+                    color: "#ffb4ab"
+                    font.family: theme.uiFont
+                    text: backend.error
+                }
+                Button {
+                    objectName: "cliAccountSignInButton"
+                    Material.roundedScale: Material.NotRounded
+                    font.family: theme.uiFont
+                    text: backend.cliSignedIn ? qsTr("Sign in again") : qsTr("Sign in with Readwise")
+                    enabled: !backend.busy
+                    onClicked: backend.login()
+                }
+                Label {
+                    Layout.fillWidth: true
+                    wrapMode: Text.Wrap
+                    color: "#858a83"
+                    font.family: theme.uiFont
+                    font.pixelSize: 10
+                    text: qsTr("The official CLI currently has no standalone sign-out command. Its sign-in remains managed by the CLI.")
+                }
+            }
+            Rectangle { Layout.fillWidth: true; height: 1; color: "#3a3d43" }
+            ColumnLayout {
+                Layout.fillWidth: true
+                spacing: 7
+                Label { text: qsTr("Direct Reader API (optional)"); color: "#e4e5e0"; font.family: theme.uiFont; font.pixelSize: 14; font.weight: Font.DemiBold }
+                Label {
+                    Layout.fillWidth: true
+                    wrapMode: Text.Wrap
+                    color: backend.needsApiToken ? "#ffb4ab" : "#b7bbb3"
+                    font.family: theme.uiFont
+                    text: backend.apiTokenAvailable
+                          ? qsTr("Connected. The token is stored in your desktop keyring.")
+                          : backend.needsApiToken
+                            ? qsTr("The saved token was rejected. Connect again with a valid token.")
+                            : qsTr("Not connected. You can still use Omawise through the CLI; the API token is optional.")
+                }
+                RowLayout {
+                    Button {
+                        objectName: "accountConnectApiButton"
+                        Material.roundedScale: Material.NotRounded
+                        font.family: theme.uiFont
+                        text: backend.apiTokenAvailable ? qsTr("Replace token") : qsTr("Connect API token")
+                        enabled: backend.apiTokenReady && !backend.busy && !backend.apiLoginBusy
+                        onClicked: apiTokenDialog.open()
+                    }
+                    Button {
+                        objectName: "accountDisconnectApiButton"
+                        visible: backend.apiTokenAvailable || backend.needsApiToken
+                        Material.roundedScale: Material.NotRounded
+                        font.family: theme.uiFont
+                        text: qsTr("Disconnect")
+                        enabled: !backend.busy && !backend.apiLoginBusy
+                        onClicked: backend.forgetApiToken()
+                    }
+                }
+            }
+            Label {
+                visible: backend.apiLoginError.length > 0
+                Layout.fillWidth: true
+                wrapMode: Text.Wrap
+                color: "#ffb4ab"
+                font.family: theme.uiFont
+                text: backend.apiLoginError
+            }
+        }
+        footer: RowLayout {
+            Layout.fillWidth: true
+            Layout.leftMargin: 14
+            Layout.rightMargin: 14
+            Layout.topMargin: 8
+            Layout.bottomMargin: 12
+            Item { Layout.fillWidth: true }
+            Button {
+                objectName: "readwiseAccountCloseButton"
+                Material.roundedScale: Material.NotRounded
+                font.family: theme.uiFont
+                text: qsTr("Close")
+                onClicked: accountDialog.close()
+            }
+        }
+    }
+
     Dialog { Material.roundedScale: Material.NotRounded;
         id: apiTokenDialog
         objectName: "apiTokenDialog"
@@ -1913,9 +2049,9 @@ ApplicationWindow {
                     { label: qsTr("Archive selected document"), key: "archive" },
                     { label: qsTr("Save URL to Reader"), key: "saveUrl", enabled: !backend.busy },
                     { label: documentIsSeen(selectedDocument()) ? qsTr("Mark selected document unseen") : qsTr("Mark selected document seen"), key: "toggleSeen", enabled: !!selectedDocument().id && !backend.busy },
-                    { label: qsTr("Connect direct Readwise API"), key: "connectApi" },
+                    { label: qsTr("Readwise account settings"), key: "account" },
                     { label: qsTr("Sign in to Readwise CLI"), key: "login" },
-                    { label: qsTr("Forget saved API token"), key: "forgetApi", enabled: backend.apiTokenAvailable && !backend.busy },
+                    { label: qsTr("Disconnect direct API token"), key: "forgetApi", enabled: backend.apiTokenAvailable && !backend.busy },
                     { label: qsTr("Clear cached article content"), key: "clearCache" },
                     { label: qsTr("Keyboard shortcuts"), key: "help" },
                     { label: qsTr("Back to library"), key: "back" }
