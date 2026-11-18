@@ -35,6 +35,8 @@ class Backend : public QObject {
     Q_PROPERTY(QString selectedAuthor READ selectedAuthor NOTIFY selectedDocumentChanged)
     Q_PROPERTY(QString selectedContent READ selectedContent NOTIFY selectedDocumentChanged)
     Q_PROPERTY(QString selectedUrl READ selectedUrl NOTIFY selectedDocumentChanged)
+    Q_PROPERTY(QString pendingMoveLocation READ pendingMoveLocation NOTIFY pendingMoveLocationChanged)
+    Q_PROPERTY(QString selectedLocation READ selectedLocation NOTIFY selectedDocumentChanged)
     Q_PROPERTY(QString selectedNote READ selectedNote NOTIFY selectedDocumentChanged)
     Q_PROPERTY(QStringList selectedTags READ selectedTags NOTIFY selectedDocumentChanged)
     Q_PROPERTY(QStringList availableDocumentTags READ availableDocumentTags NOTIFY availableDocumentTagsChanged)
@@ -65,6 +67,8 @@ public:
     QString selectedAuthor() const { return m_selectedAuthor; }
     QString selectedContent() const { return m_selectedContent; }
     QString selectedUrl() const { return m_selectedUrl; }
+    QString pendingMoveLocation() const { return m_pendingLocation; }
+    QString selectedLocation() const { return m_selectedLocation; }
     QString selectedNote() const { return m_selectedNote; }
     QStringList selectedTags() const { return m_selectedTags; }
     QStringList availableDocumentTags() const { return m_availableDocumentTags; }
@@ -105,7 +109,8 @@ public:
     Q_INVOKABLE bool openArticleInEditor(const QString &editorId, const QString &content,
                                          const QVariantMap &metadata);
     Q_INVOKABLE QString formattedMarkdown(const QString &markdown, const QString &accent,
-                                          const QVariantMap &readerStyle = {}) const;
+                                          const QVariantMap &readerStyle = {},
+                                          const QVariantMap &themeColors = {}) const;
     Q_INVOKABLE bool copyArticleMarkdown(const QString &content, const QVariantMap &metadata);
     Q_INVOKABLE bool copyDocumentUrl(const QString &url);
 
@@ -126,6 +131,7 @@ signals:
     void selectedHighlightsChanged();
     void availableDocumentTagsChanged();
     void locationChanged();
+    void pendingMoveLocationChanged();
 
 private:
     enum class Operation { None, List, ListMore, Search, TitleSearch, Detail, ApiDetail, ValidateApiToken, Highlights, Archive, Move, SaveUrl, SetSeen, SaveNote, SaveTags, CreateHighlight, SaveHighlightNote, AddHighlightTags, RemoveHighlightTags, Login };
@@ -137,6 +143,7 @@ private:
     void completeProgressWrite(const QString &id, int progress, const QByteArray &response,
                                const QString &failure = {});
     void setProgressBusy(bool busy);
+    void clearPendingMove();
     void handleApiReply(QNetworkReply *reply);
     void loadApiTokenFromKeyring();
     void storeApiTokenInKeyring(const QString &token);
@@ -202,6 +209,7 @@ private:
     QString m_selectedAuthor;
     QString m_selectedContent;
     QString m_selectedUrl;
+    QString m_selectedLocation = "new";
     QString m_selectedNote;
     QString m_selectedId;
     QStringList m_selectedTags;

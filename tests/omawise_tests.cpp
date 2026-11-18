@@ -36,6 +36,7 @@ private slots:
     void listPaginationAppendsAndDeduplicates();
     void searchMergesLocalAndRemoteResults();
     void moveDocumentUsesSupportedLocationCommand();
+    void moveDocumentReportsPerItemFailure();
     void readingProgressUsesReaderFractionScale();
     void authenticationErrorsAreDetectedAndClearedOnRetry();
     void documentNoteUsesBulkMetadataCommand();
@@ -83,7 +84,7 @@ void BackendTests::initTestCase() {
               "  *reader-set-highlight-notes*) printf '%s\\n' '{\"success\":true}' ;;\n"
               "  *reader-add-tags-to-highlight*) printf '%s\\n' '{\"success\":true}' ;;\n"
               "  *reader-remove-tags-from-highlight*) printf '%s\\n' '{\"success\":true}' ;;\n"
-              "  *reader-move-documents*) printf '%s\\n' '{\"success\":true}' ;;\n"
+              "  *reader-move-documents*) if [ \"$OMAWISE_MOVE_DELAY\" = 1 ]; then sleep 0.3; fi; if [ \"$OMAWISE_MOVE_FAILURE\" = 1 ]; then printf '%s\\n' '{\"results\":[{\"id\":\"local\",\"success\":false,\"error\":\"Document not found\"}]}' ; else printf '%s\\n' '{\"success\":true}' ; fi ;;\n"
               "  *reader-get-document-highlights*) printf '%s\\n' '{\"results\":[{\"id\":\"highlight-1\",\"text\":\"Saved passage\",\"notes\":\"Existing highlight note\",\"tags\":[\"research\"]}]}' ;;\n"
               "  *reader-list-tags*) printf '%s\\n' '{\"results\":[{\"key\":\"shared\",\"name\":\"shared\"},{\"key\":\"technology\",\"name\":\"technology\"}]}' ;;\n"
               "  *reader-create-highlight*) printf '%s\\n' '{\"success\":true}' ;;\n"
@@ -181,6 +182,21 @@ void BackendTests::moveDocumentUsesSupportedLocationCommand() {
     QFile log(m_logPath);
     QVERIFY(log.open(QIODevice::ReadOnly | QIODevice::Text));
     QVERIFY(log.readAll().contains("reader-move-documents --document-ids doc-42 --location later"));
+}
+
+void BackendTests::moveDocumentReportsPerItemFailure() {
+    Backend backend;
+    backend.refresh();
+    QTRY_VERIFY_WITH_TIMEOUT(!backend.busy(), 3000);
+    backend.selectDocument("local", "Local article", "", "", {}, "");
+    qputenv("OMAWISE_MOVE_FAILURE", "1");
+    backend.moveDocument("local", "later");
+    QTRY_VERIFY_WITH_TIMEOUT(!backend.busy(), 3000);
+    const QString error = backend.error();
+    const QString location = backend.documents().first().toMap().value("location").toString();
+    qunsetenv("OMAWISE_MOVE_FAILURE");
+    QVERIFY(error.contains("Document not found"));
+    QVERIFY(location.isEmpty());
 }
 
 void BackendTests::authenticationErrorsAreDetectedAndClearedOnRetry() {
@@ -664,16 +680,32 @@ void BackendTests::qmlSearchActivationAndReaderSelection() {
     QTRY_VERIFY_WITH_TIMEOUT(!appearanceDialog->property("visible").toBool(), 1000);
     QVERIFY(!inboxButton->property("enabled").toBool());
     QVERIFY(laterButton->property("enabled").toBool());
-    QVERIFY(QMetaObject::invokeMethod(laterButton, "clicked"));
+    qputenv("OMAWISE_MOVE_DELAY", "1");
+    QVERIFY(clickObject(laterButton));
+    QCOMPARE(backend.pendingMoveLocation(), QStringLiteral("later"));
+    QVERIFY(laterButton->property("currentLocation").toBool());
+    QVERIFY(!inboxButton->property("currentLocation").toBool());
+    QVERIFY(QMetaObject::invokeMethod(engine.rootObjects().first(), "returnToLibrary"));
+    QVERIFY(engine.rootObjects().first()->property("reading").toBool());
     QTRY_VERIFY_WITH_TIMEOUT(!backend.busy(), 3000);
+    qunsetenv("OMAWISE_MOVE_DELAY");
+    QVERIFY(backend.pendingMoveLocation().isEmpty());
     QCOMPARE(backend.documents().first().toMap().value("location").toString(), QStringLiteral("later"));
+    QCOMPARE(backend.selectedLocation(), QStringLiteral("later"));
+    QVERIFY(laterButton->property("currentLocation").toBool());
+    QVERIFY(!inboxButton->property("currentLocation").toBool());
     QVERIFY(!laterButton->property("enabled").toBool());
+    QVERIFY(inboxButton->property("enabled").toBool());
     QVERIFY(QMetaObject::invokeMethod(archiveButton, "clicked"));
     QTRY_VERIFY_WITH_TIMEOUT(!backend.busy(), 3000);
     QCOMPARE(backend.documents().first().toMap().value("location").toString(), QStringLiteral("archive"));
+    QVERIFY(!archiveButton->property("enabled").toBool());
+    QVERIFY(laterButton->property("enabled").toBool());
     QVERIFY(QMetaObject::invokeMethod(inboxButton, "clicked"));
     QTRY_VERIFY_WITH_TIMEOUT(!backend.busy(), 3000);
     QCOMPARE(backend.documents().first().toMap().value("location").toString(), QStringLiteral("new"));
+    QVERIFY(!inboxButton->property("enabled").toBool());
+    QVERIFY(laterButton->property("enabled").toBool());
     QVERIFY(QMetaObject::invokeMethod(article, "forceActiveFocus"));
     qunsetenv("OMAWISE_FORMATTING_FIXTURE");
     QTRY_VERIFY_WITH_TIMEOUT(article->property("activeFocus").toBool(), 1000);

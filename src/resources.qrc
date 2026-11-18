@@ -2,9 +2,19 @@
   <qresource prefix="/">
     <file>Main.qml</file>
     <file alias="assets/omawise-mark.svg">../assets/omawise-mark.svg</file>
+    <file alias="assets/omawise-mark-light.svg">../assets/omawise-mark-light.svg</file>
     <file alias="icons/inbox.svg">../assets/icons/inbox.svg</file>
     <file alias="icons/later.svg">../assets/icons/later.svg</file>
     <file alias="icons/archive.svg">../assets/icons/archive.svg</file>
+    <file alias="icons/shortlist.svg">../assets/icons/shortlist.svg</file>
+    <file alias="icons/feed.svg">../assets/icons/feed.svg</file>
+    <file alias="icons/add-document.svg">../assets/icons/add-document.svg</file>
+    <file alias="icons/open.svg">../assets/icons/open.svg</file>
+    <file alias="icons/refresh.svg">../assets/icons/refresh.svg</file>
+    <file alias="icons/account.svg">../assets/icons/account.svg</file>
+    <file alias="icons/profile.svg">../assets/icons/profile.svg</file>
+    <file alias="icons/preferences.svg">../assets/icons/preferences.svg</file>
+    <file alias="icons/settings.svg">../assets/icons/settings.svg</file>
     <file alias="icons/back.svg">../assets/icons/back.svg</file>
   </qresource>
 </RCC>
