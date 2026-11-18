@@ -1,12 +1,13 @@
 # Implementation handoff
 
-**Status date:** 2026-11-17
+**Status date:** 2026-11-18
 **Current phase:** Phase 1 vertical slice, early development
 **Purpose:** Let another developer or agent continue without relying on conversation history.
 
 ## What exists
 
 - Article formatting is configurable through `~/.config/omawise/reader.toml`, with live reload and bounded fallback values. The `Aa` reader appearance dialog has pickers for article typeface, text size, line spacing, paragraph spacing, and content width; changes are atomically written to TOML and applied while the app runs. Defaults are 12 px text, 1.2 line spacing, and 18 pt between paragraphs, retaining Omawise's current dark colors, Omarchy accent links, and monospace typeface. The 760 px reading column remains configurable.
+- The application and article reader follow the active Omarchy palette. `Theme` reads the `mode` and semantic colors from `~/.local/state/omarchy/current/theme/colors.toml`, watches the current theme and `theme.name` for switches, and exposes semantic UI colors to QML. Missing or invalid entries fall back to Omawise's existing dark palette. Light/dark Material controls, link colors, selection colors, dialogs, list, metadata pane, and reader chrome follow the active theme.
 - The Arch package includes a TOML example and the `omawise-reader-settings` agent skill under `/usr/share/omawise/`.
 - The article toolbar uses compact Inbox/Later/Archive icons that move the selected article, an `Aa` appearance editor, and an overflow menu with **Copy Markdown** (including YAML frontmatter), highlight, **Open in Reader**, reset progress, open original, and copy original URL actions.
 - The command palette can save HTTP/HTTPS URLs to Reader through `reader-create-document`; the Info pane and palette can mark a selected document seen/unseen. Reading progress is displayed as a scroll percentage and converted to/from Readwise's fractional `reading_progress` field. `reader.toml` supports `progress_mode = "last_position"` (default) or `"furthest_position"`; leaving/switching articles and closing the app flush the selected position, and restore waits for article content layout. The Reader API exposes `reading_progress`, not a separate last-location field; PDF progress remains unsupported.
@@ -19,7 +20,7 @@
 - Search runs only after Enter, avoiding repeated CLI launches while the user types; Escape clears the query and returns to the current view.
 - Keyboard navigation: `j/k` and arrows in the focused nav/list; Enter opens/activates; `/` focuses search; `Ctrl+K` opens the command palette; `Ctrl+←/→` changes focus between navigation and document list; `Ctrl+R` refreshes; `a` archives; `?` opens help.
 - The left pane switches from library navigation to an article table of contents while reading; the article view returns to the library list through its Back button or Escape. A bottom status bar shows current operation and errors, with a compact activity spinner. Article loading stays inline and does not cover the reading surface. The library list supports both single-click selection and double-click opening.
-- `src/theme.{h,cpp}` follows Omarchy accent color and Hyprland rounding.
+- `src/theme.{h,cpp}` follows Omarchy's live palette and Hyprland rounding.
 - `tests/omawise_tests.cpp` contains Qt Test coverage for fake-CLI backend behavior and an offscreen QML interaction path. `bin/build` runs the suite after the application build.
 - The reading view converts Markdown and HTML fragments using `QTextDocument`, then renders selectable rich text in a centered 760 px column inside one scrollable text surface, with styled body text, headings, lists, code, and quotes.
 - `prototype/reader-ux/` is the original disconnected mock. The active app is the project-root `omawise` target.

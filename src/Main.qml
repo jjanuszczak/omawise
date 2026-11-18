@@ -20,8 +20,8 @@ ApplicationWindow {
             close.accepted = false
         }
     }
-    color: "#17191d"
-    Material.theme: Material.Dark
+    color: theme.colors.window
+    Material.theme: theme.colorScheme === "dark" ? Material.Dark : Material.Light
     Material.accent: theme.accent
     Material.roundedScale: Material.NotRounded
 
@@ -98,8 +98,14 @@ ApplicationWindow {
     }
 
     function documentLocation() {
-        const location = selectedDocument().location || backend.location
+        const location = reading
+            ? (backend.selectedLocation || selectedDocument().location || backend.location)
+            : (selectedDocument().location || backend.location)
         return location === "inbox" ? "new" : location
+    }
+
+    function activeDocumentLocation() {
+        return backend.pendingMoveLocation || documentLocation()
     }
 
     function inspectSelectedDocument() {
@@ -180,11 +186,15 @@ ApplicationWindow {
     }
 
     function returnToLibrary() {
+        if (backend.pendingMoveLocation)
+            return
         saveCurrentProgress(true)
-        const movedFromCurrentView = documentLocation() !== backend.location
+        const destination = documentLocation()
         reading = false
-        if (movedFromCurrentView)
-            backend.refresh()
+        if (destination !== backend.location) {
+            searchField.clear()
+            backend.setLocation(destination)
+        }
         Qt.callLater(function() { documentList.forceActiveFocus() })
     }
 
@@ -571,7 +581,7 @@ ApplicationWindow {
         Rectangle {
             Layout.preferredWidth: 224
             Layout.fillHeight: true
-            color: "#1d2025"
+            color: theme.colors.panel
             ColumnLayout {
                 anchors.fill: parent
                 anchors.margins: 17
@@ -579,23 +589,25 @@ ApplicationWindow {
                 RowLayout {
                     visible: !reading
                     spacing: 10
-                    Image { source: "qrc:/assets/omawise-mark.svg"; sourceSize.width: 36; sourceSize.height: 36; width: 36; height: 36; smooth: false }
-                    Text { text: qsTr("Omawise"); color: "#f0f1ed"; font.family: theme.uiFont; font.pixelSize: 18; font.weight: Font.DemiBold }
+                    Image { source: theme.colorScheme === "light" ? "qrc:/assets/omawise-mark-light.svg" : "qrc:/assets/omawise-mark.svg"; sourceSize.width: 36; sourceSize.height: 36; width: 36; height: 36; smooth: false }
+                    Text { text: qsTr("Omawise"); color: theme.colors.textBright; font.family: theme.uiFont; font.pixelSize: 18; font.weight: Font.DemiBold }
                     Item { Layout.fillWidth: true }
                     ToolButton {
                         objectName: "saveUrlButton"
                         visible: !reading
                         enabled: !backend.busy
-                        implicitWidth: 32
-                        implicitHeight: 32
+                        implicitWidth: 38
+                        implicitHeight: 38
                         padding: 0
-                        text: "＋"
-                        font.family: theme.uiFont
-                        font.pixelSize: 22
+                        icon.source: "qrc:/icons/add-document.svg"
+                        icon.width: 24
+                        icon.height: 24
+                        icon.color: theme.colors.textSecondary
+                        display: AbstractButton.IconOnly
                         Accessible.name: qsTr("Save URL to Reader")
                         ToolTip.visible: hovered
                         ToolTip.text: qsTr("Save URL to Reader")
-                        background: Rectangle { color: parent.hovered ? "#343940" : "transparent"; radius: 0 }
+                        background: Rectangle { color: parent.hovered ? theme.colors.surfaceAlt : "transparent"; radius: 0 }
                         onClicked: saveUrlDialog.open()
                     }
                 }
@@ -635,30 +647,39 @@ ApplicationWindow {
                     activeFocusOnTab: true
                     currentIndex: 0
                     model: [
-                        { label: qsTr("Inbox"), location: "new", glyph: "⌂" },
-                        { label: qsTr("Later"), location: "later", glyph: "◷" },
-                        { label: qsTr("Shortlist"), location: "shortlist", glyph: "☆" },
-                        { label: qsTr("Archive"), location: "archive", glyph: "▣" },
-                        { label: qsTr("Feed"), location: "feed", glyph: "◉" }
+                        { label: qsTr("Inbox"), location: "new", icon: "qrc:/icons/inbox.svg" },
+                        { label: qsTr("Later"), location: "later", icon: "qrc:/icons/later.svg" },
+                        { label: qsTr("Shortlist"), location: "shortlist", icon: "qrc:/icons/shortlist.svg" },
+                        { label: qsTr("Archive"), location: "archive", icon: "qrc:/icons/archive.svg" },
+                        { label: qsTr("Feed"), location: "feed", icon: "qrc:/icons/feed.svg" }
                     ]
                     delegate: ItemDelegate { font.family: theme.uiFont;
                         required property var modelData
                         width: navList.width
                         height: 40
-                        padding: 0
+                        leftPadding: 10
+                        rightPadding: 24
+                        topPadding: 0
+                        bottomPadding: 0
                         enabled: !backend.busy
                         highlighted: backend.location === modelData.location
+                        text: modelData.label
+                        icon.source: modelData.icon
+                        icon.width: 24
+                        icon.height: 24
+                        icon.color: highlighted ? theme.accent : theme.colors.textSecondary
                         background: Rectangle {
                             radius: Math.min(2, theme.radius)
-                            color: highlighted ? "#30352a" : navDelegate.activeFocus ? "#292d32" : "transparent"
-                        }
-                        contentItem: RowLayout {
-                            anchors.fill: parent
-                            anchors.leftMargin: 10
-                            anchors.rightMargin: 9
-                            Text { text: modelData.glyph; color: theme.accent; font.family: theme.uiFont; font.pixelSize: 17 }
-                            Text { text: modelData.label; color: "#e4e5e0"; font.family: theme.uiFont; font.pixelSize: 13; Layout.fillWidth: true }
-                            Text { text: backend.location === modelData.location ? "•" : ""; color: theme.accent; font.family: theme.uiFont; font.pixelSize: 13 }
+                            color: highlighted ? theme.colors.selection : navDelegate.activeFocus ? theme.colors.surfaceAlt : "transparent"
+                            Text {
+                                anchors.right: parent.right
+                                anchors.rightMargin: 9
+                                anchors.verticalCenter: parent.verticalCenter
+                                text: navDelegate.highlighted ? "•" : ""
+                                color: theme.accent
+                                font.family: theme.uiFont
+                                font.pixelSize: 13
+                            }
                         }
                         onClicked: {
                             searchField.clear()
@@ -682,7 +703,7 @@ ApplicationWindow {
                 Text {
                     text: qsTr("CONTENTS")
                     visible: reading
-                    color: "#858a83"
+                    color: theme.colors.textMuted
                     font.family: theme.uiFont; font.pixelSize: 10
                     font.weight: Font.DemiBold
                     Layout.fillWidth: true
@@ -705,14 +726,14 @@ ApplicationWindow {
                         rightPadding: 8
                         contentItem: Text {
                             text: modelData.text
-                            color: "#d9dbd5"
+                            color: theme.colors.textSecondary
                             font.family: theme.uiFont; font.pixelSize: 12
                             elide: Text.ElideRight
                             verticalAlignment: Text.AlignVCenter
                         }
                         background: Rectangle {
                             radius: Math.min(2, theme.radius)
-                            color: parent.hovered || parent.activeFocus ? "#292d32" : "transparent"
+                            color: parent.hovered || parent.activeFocus ? theme.colors.surfaceAlt : "transparent"
                         }
                         onClicked: scrollToHeading(modelData.position)
                     }
@@ -721,13 +742,13 @@ ApplicationWindow {
                         width: parent.width - 18
                         height: 78
                         radius: Math.min(2, theme.radius)
-                        color: "#272a2f"
+                        color: theme.colors.surfaceAlt
                         visible: outlineList.count === 0
                         Text {
                             anchors.fill: parent
                             anchors.margins: 10
                             text: qsTr("No headings in this article")
-                            color: "#9da198"
+                            color: theme.colors.textMuted
                             font.family: theme.uiFont; font.pixelSize: 11
                             wrapMode: Text.Wrap
                             verticalAlignment: Text.AlignVCenter
@@ -735,14 +756,14 @@ ApplicationWindow {
                     }
                 }
                 Item { visible: !reading; Layout.fillHeight: !reading }
-                Rectangle { visible: !reading; Layout.fillWidth: true; height: 1; color: "#34373c" }
-                Text { visible: !reading; text: qsTr("j/k move · Enter open · Tab changes pane · ? shortcuts"); color: "#93978f"; font.family: theme.uiFont; font.pixelSize: 9; wrapMode: Text.Wrap; Layout.fillWidth: true }
+                Rectangle { visible: !reading; Layout.fillWidth: true; height: 1; color: theme.colors.border }
+                Text { visible: !reading; text: qsTr("j/k move · Enter open · Tab changes pane · ? shortcuts"); color: theme.colors.textMuted; font.family: theme.uiFont; font.pixelSize: 9; wrapMode: Text.Wrap; Layout.fillWidth: true }
                 Rectangle {
                     visible: !reading && backend.cliSignedIn && backend.apiTokenReady && !backend.apiTokenAvailable
                     Layout.fillWidth: true
                     implicitHeight: apiConnectPrompt.implicitHeight + 18
-                    color: "#272a2f"
-                    border.color: backend.needsApiToken ? "#8b5149" : "#41483d"
+                    color: theme.colors.surfaceAlt
+                    border.color: backend.needsApiToken ? theme.colors.error : theme.colors.border
                     radius: Math.min(2, theme.radius)
                     ColumnLayout {
                         id: apiConnectPrompt
@@ -753,7 +774,7 @@ ApplicationWindow {
                             text: backend.needsApiToken
                                   ? qsTr("The saved API token was rejected.")
                                   : qsTr("Connect the direct API for faster lists and article loading.")
-                            color: "#e4dfce"; font.family: theme.uiFont; font.pixelSize: 10
+                            color: theme.colors.warning; font.family: theme.uiFont; font.pixelSize: 10
                             wrapMode: Text.Wrap; Layout.fillWidth: true
                         }
                         Button {
@@ -771,15 +792,15 @@ ApplicationWindow {
                     visible: !reading && backend.authenticationRequired
                     Layout.fillWidth: true
                     implicitHeight: authPrompt.implicitHeight + 18
-                    color: "#272a2f"
-                    border.color: "#514a35"
+                    color: theme.colors.surfaceAlt
+                    border.color: theme.colors.warning
                     radius: Math.min(2, theme.radius)
                     ColumnLayout {
                         id: authPrompt
                         anchors.fill: parent
                         anchors.margins: 9
                         spacing: 7
-                        Text { text: qsTr("Connect to Readwise to use search, highlights, and annotation features. Omawise will open your browser for sign-in."); color: "#e4dfce"; font.family: theme.uiFont; font.pixelSize: 10; wrapMode: Text.Wrap; Layout.fillWidth: true }
+                        Text { text: qsTr("Connect to Readwise to use search, highlights, and annotation features. Omawise will open your browser for sign-in."); color: theme.colors.warning; font.family: theme.uiFont; font.pixelSize: 10; wrapMode: Text.Wrap; Layout.fillWidth: true }
                         Button { Material.roundedScale: Material.NotRounded; font.family: theme.uiFont; text: qsTr("Set up Readwise"); objectName: "authSignInButton"; Layout.fillWidth: true; enabled: !backend.busy; onClicked: accountDialog.open() }
                     }
                 }
@@ -790,7 +811,9 @@ ApplicationWindow {
                     spacing: 2
                     ToolButton {
                         objectName: "accountSettingsButton"
-                        text: "♙"
+                        icon.source: "qrc:/icons/account.svg"
+                        icon.width: 24; icon.height: 24; icon.color: theme.colors.textSecondary
+                        display: AbstractButton.IconOnly
                         Accessible.name: qsTr("Readwise account settings")
                         ToolTip.visible: hovered
                         ToolTip.text: qsTr("Readwise account")
@@ -799,7 +822,9 @@ ApplicationWindow {
                     }
                     ToolButton {
                         objectName: "readwiseProfileButton"
-                        text: "◉"
+                        icon.source: "qrc:/icons/profile.svg"
+                        icon.width: 24; icon.height: 24; icon.color: theme.colors.textSecondary
+                        display: AbstractButton.IconOnly
                         Accessible.name: qsTr("Readwise profile")
                         ToolTip.visible: hovered
                         ToolTip.text: qsTr("Readwise profile")
@@ -808,7 +833,9 @@ ApplicationWindow {
                     }
                     ToolButton {
                         objectName: "readwiseSettingsButton"
-                        text: "⚙"
+                        icon.source: "qrc:/icons/preferences.svg"
+                        icon.width: 24; icon.height: 24; icon.color: theme.colors.textSecondary
+                        display: AbstractButton.IconOnly
                         Accessible.name: qsTr("Readwise settings")
                         ToolTip.visible: hovered
                         ToolTip.text: qsTr("Readwise settings")
@@ -817,7 +844,9 @@ ApplicationWindow {
                     }
                     ToolButton {
                         objectName: "localSettingsButton"
-                        text: "☷"
+                        icon.source: "qrc:/icons/settings.svg"
+                        icon.width: 24; icon.height: 24; icon.color: theme.colors.textSecondary
+                        display: AbstractButton.IconOnly
                         Accessible.name: qsTr("Omawise settings")
                         ToolTip.visible: hovered
                         ToolTip.text: qsTr("Omawise settings")
@@ -828,7 +857,7 @@ ApplicationWindow {
             }
         }
 
-        Rectangle { Layout.fillHeight: true; width: 1; color: "#303238" }
+        Rectangle { Layout.fillHeight: true; width: 1; color: theme.colors.borderStrong }
 
         ColumnLayout {
             Layout.preferredWidth: reading ? 0 : 410
@@ -843,23 +872,28 @@ ApplicationWindow {
                 Layout.preferredHeight: 70
                 Layout.leftMargin: 20
                 Layout.rightMargin: 16
-                Text { text: reading ? qsTr("Library") : locationLabel(backend.location); color: "#f0f1ed"; font.family: theme.uiFont; font.pixelSize: 18; font.weight: Font.DemiBold; Layout.fillWidth: true }
+                Text { text: reading ? qsTr("Library") : locationLabel(backend.location); color: theme.colors.textBright; font.family: theme.uiFont; font.pixelSize: 18; font.weight: Font.DemiBold; Layout.fillWidth: true }
                 ToolButton {
                     objectName: "openSelectedDocumentButton"
-                    implicitWidth: 34; implicitHeight: 34; padding: 0
-                    text: "↗"; font.family: theme.uiFont; font.pixelSize: 17
+                    implicitWidth: 38; implicitHeight: 38; padding: 0
+                    icon.source: "qrc:/icons/open.svg"
+                    icon.width: 24; icon.height: 24; icon.color: theme.colors.textSecondary
+                    display: AbstractButton.IconOnly
                     enabled: !!selectedDocument().id && (!backend.busy || backend.metadataBusy)
                     onClicked: openSelected()
-                    background: Rectangle { color: parent.hovered ? "#343940" : "transparent"; radius: 0 }
+                    background: Rectangle { color: parent.hovered ? theme.colors.surfaceAlt : "transparent"; radius: 0 }
                     ToolTip.visible: hovered
                     ToolTip.text: qsTr("Open selected article (Enter)")
                 }
                 ToolButton {
-                    implicitWidth: 34; implicitHeight: 34; padding: 0
-                    text: "⟳"; font.family: theme.uiFont; font.pixelSize: 17
+                    objectName: "refreshLibraryButton"
+                    implicitWidth: 38; implicitHeight: 38; padding: 0
+                    icon.source: "qrc:/icons/refresh.svg"
+                    icon.width: 24; icon.height: 24; icon.color: theme.colors.textSecondary
+                    display: AbstractButton.IconOnly
                     enabled: !backend.busy
                     onClicked: backend.refresh()
-                    background: Rectangle { color: parent.hovered ? "#343940" : "transparent"; radius: 0 }
+                    background: Rectangle { color: parent.hovered ? theme.colors.surfaceAlt : "transparent"; radius: 0 }
                     ToolTip.visible: hovered
                     ToolTip.text: qsTr("Refresh (R)")
                 }
@@ -900,26 +934,26 @@ ApplicationWindow {
                     height: 112
                     padding: 0
                     background: Rectangle {
-                        color: index === documentList.currentIndex ? "#292d32" : documentDelegate.activeFocus ? "#24272c" : "transparent"
+                        color: index === documentList.currentIndex ? theme.colors.surfaceAlt : documentDelegate.activeFocus ? theme.colors.surfaceAlt : "transparent"
                         Rectangle { width: 3; anchors.left: parent.left; anchors.top: parent.top; anchors.bottom: parent.bottom; color: index === documentList.currentIndex ? theme.accent : "transparent" }
                     }
                     contentItem: ColumnLayout {
                         anchors.fill: parent
                         anchors.leftMargin: 17; anchors.rightMargin: 14; anchors.topMargin: 12; anchors.bottomMargin: 11
                         spacing: 5
-                        Text { text: title || qsTr("Untitled document"); color: "#e9eae5"; font.family: theme.uiFont; font.pixelSize: 13; font.weight: Font.DemiBold; elide: Text.ElideRight; Layout.fillWidth: true }
-                        Text { text: [author, site_name || source].filter(function(value) { return !!value }).join(" · "); color: "#aaaDA6"; font.family: theme.uiFont; font.pixelSize: 11; elide: Text.ElideRight; Layout.fillWidth: true }
-                        Text { text: summary || ""; color: "#858a83"; font.family: theme.uiFont; font.pixelSize: 10; elide: Text.ElideRight; Layout.fillWidth: true }
+                        Text { text: title || qsTr("Untitled document"); color: theme.colors.textBright; font.family: theme.uiFont; font.pixelSize: 13; font.weight: Font.DemiBold; elide: Text.ElideRight; Layout.fillWidth: true }
+                        Text { text: [author, site_name || source].filter(function(value) { return !!value }).join(" · "); color: theme.colors.textSecondary; font.family: theme.uiFont; font.pixelSize: 11; elide: Text.ElideRight; Layout.fillWidth: true }
+                        Text { text: summary || ""; color: theme.colors.textMuted; font.family: theme.uiFont; font.pixelSize: 10; elide: Text.ElideRight; Layout.fillWidth: true }
                         RowLayout {
                             Layout.fillWidth: true
                             Text { text: category.toUpperCase(); color: theme.accent; font.family: theme.uiFont; font.pixelSize: 9; font.bold: true }
-                            Text { text: reading_time || listening_time; color: "#858a83"; font.family: theme.uiFont; font.pixelSize: 10; Layout.fillWidth: true }
-                            Text { text: (seen === undefined ? !first_opened_at : !Boolean(seen)) ? qsTr("UNSEEN") : ""; color: "#abb0a4"; font.family: theme.uiFont; font.pixelSize: 8 }
+                            Text { text: reading_time || listening_time; color: theme.colors.textMuted; font.family: theme.uiFont; font.pixelSize: 10; Layout.fillWidth: true }
+                            Text { text: (seen === undefined ? !first_opened_at : !Boolean(seen)) ? qsTr("UNSEEN") : ""; color: theme.colors.textSecondary; font.family: theme.uiFont; font.pixelSize: 8 }
                         }
                         Rectangle {
                             Layout.fillWidth: true
-                            height: 2
-                            color: "#3b3e43"
+                            height: 3
+                            color: theme.colors.selection
                             Rectangle { width: parent.width * Math.max(0, Math.min(100, Number(reading_progress) || 0)) / 100; height: parent.height; color: theme.accent }
                         }
                     }
@@ -979,7 +1013,7 @@ ApplicationWindow {
                 Rectangle {
                     anchors.fill: parent
                     visible: backend.busy && !backend.metadataBusy
-                    color: "#d917191d"
+                    color: theme.colors.scrim
                     z: 2
                     BusyIndicator {
                         anchors.centerIn: parent
@@ -995,17 +1029,17 @@ ApplicationWindow {
                 Layout.margins: 12
                 height: 70
                 radius: Math.min(2, theme.radius)
-                color: "#272a2f"
+                color: theme.colors.surfaceAlt
                 visible: backend.documents.length === 0
                 Column {
                     anchors.fill: parent; anchors.margins: 10; spacing: 4
-                    Text { text: backend.error || backend.status; color: backend.error.length > 0 ? "#ffb4ab" : "#e5e6e0"; font.family: theme.uiFont; font.pixelSize: 11; wrapMode: Text.Wrap; width: parent.width }
+                    Text { text: backend.error || backend.status; color: backend.error.length > 0 ? theme.colors.error : theme.colors.text; font.family: theme.uiFont; font.pixelSize: 11; wrapMode: Text.Wrap; width: parent.width }
                 }
             }
-            Text { Layout.leftMargin: 18; Layout.bottomMargin: 12; text: qsTr("j/k move   ↵ open   Ctrl+← nav   ? shortcuts"); color: "#858a83"; font.family: theme.uiFont; font.pixelSize: 9 }
+            Text { Layout.leftMargin: 18; Layout.bottomMargin: 12; text: qsTr("j/k move   ↵ open   Ctrl+← nav   ? shortcuts"); color: theme.colors.textMuted; font.family: theme.uiFont; font.pixelSize: 9 }
         }
 
-        Rectangle { Layout.fillHeight: true; width: 1; color: "#303238" }
+        Rectangle { Layout.fillHeight: true; width: 1; color: theme.colors.borderStrong }
 
         Item {
             Layout.fillWidth: reading
@@ -1030,9 +1064,11 @@ ApplicationWindow {
                     Layout.fillWidth: true
                     ToolButton {
                         text: qsTr("Back to library"); icon.source: "qrc:/icons/back.svg"
-                        icon.width: 22; icon.height: 22; icon.color: "#aeb2aa"
+                        icon.width: 22; icon.height: 22; icon.color: theme.colors.textSecondary
                         display: AbstractButton.IconOnly
-                        ToolTip.visible: hovered; ToolTip.text: qsTr("Back to library")
+                        enabled: !backend.pendingMoveLocation
+                        ToolTip.visible: hovered
+                        ToolTip.text: backend.pendingMoveLocation ? qsTr("Wait for the move to finish") : qsTr("Back to library")
                         onClicked: returnToLibrary()
                     }
                     ToolButton {
@@ -1045,32 +1081,35 @@ ApplicationWindow {
                     ToolButton {
                         objectName: "inboxLocationButton"
                         text: qsTr("Inbox"); icon.source: "qrc:/icons/inbox.svg"
-                        icon.width: 24; icon.height: 24; icon.color: checked ? theme.accent : "#aeb2aa"
-                        display: AbstractButton.IconOnly; checkable: true
-                        checked: documentLocation() === "new"
-                        enabled: !backend.busy && !checked
+                        readonly property bool currentLocation: activeDocumentLocation() === "new"
+                        icon.width: 24; icon.height: 24; icon.color: currentLocation ? theme.accent : theme.colors.textSecondary
+                        display: AbstractButton.IconOnly
+                        enabled: !backend.busy && !currentLocation
                         ToolTip.visible: hovered; ToolTip.text: qsTr("Move to Inbox")
-                        onClicked: backend.moveDocument(selectedDocument().id || "", "new")
+                        background: Rectangle { color: parent.currentLocation ? theme.colors.selection : parent.hovered ? theme.colors.surfaceAlt : "transparent"; radius: 0 }
+                        onClicked: backend.moveDocument(progressDocumentId || selectedDocument().id || "", "new")
                     }
                     ToolButton {
                         objectName: "laterLocationButton"
                         text: qsTr("Later"); icon.source: "qrc:/icons/later.svg"
-                        icon.width: 24; icon.height: 24; icon.color: checked ? theme.accent : "#aeb2aa"
-                        display: AbstractButton.IconOnly; checkable: true
-                        checked: documentLocation() === "later"
-                        enabled: !backend.busy && !checked
+                        readonly property bool currentLocation: activeDocumentLocation() === "later"
+                        icon.width: 24; icon.height: 24; icon.color: currentLocation ? theme.accent : theme.colors.textSecondary
+                        display: AbstractButton.IconOnly
+                        enabled: !backend.busy && !currentLocation
                         ToolTip.visible: hovered; ToolTip.text: qsTr("Move to Later")
-                        onClicked: backend.moveDocument(selectedDocument().id || "", "later")
+                        background: Rectangle { color: parent.currentLocation ? theme.colors.selection : parent.hovered ? theme.colors.surfaceAlt : "transparent"; radius: 0 }
+                        onClicked: backend.moveDocument(progressDocumentId || selectedDocument().id || "", "later")
                     }
                     ToolButton {
                         objectName: "archiveLocationButton"
                         text: qsTr("Archive"); icon.source: "qrc:/icons/archive.svg"
-                        icon.width: 24; icon.height: 24; icon.color: checked ? theme.accent : "#aeb2aa"
-                        display: AbstractButton.IconOnly; checkable: true
-                        checked: documentLocation() === "archive"
-                        enabled: !backend.busy && !checked
+                        readonly property bool currentLocation: activeDocumentLocation() === "archive"
+                        icon.width: 24; icon.height: 24; icon.color: currentLocation ? theme.accent : theme.colors.textSecondary
+                        display: AbstractButton.IconOnly
+                        enabled: !backend.busy && !currentLocation
                         ToolTip.visible: hovered; ToolTip.text: qsTr("Move to Archive")
-                        onClicked: backend.moveDocument(selectedDocument().id || "", "archive")
+                        background: Rectangle { color: parent.currentLocation ? theme.colors.selection : parent.hovered ? theme.colors.surfaceAlt : "transparent"; radius: 0 }
+                        onClicked: backend.moveDocument(progressDocumentId || selectedDocument().id || "", "archive")
                     }
                     ToolButton {
                         id: articleMoreButton
@@ -1083,16 +1122,16 @@ ApplicationWindow {
                             articleMoreButton.height + 4)
                     }
                     }
-                    Text { text: backend.selectedAuthor; color: "#aeb2aa"; font.family: theme.uiFont; font.pixelSize: 12 }
-                    Text { text: backend.selectedTitle || qsTr("Select a document"); color: "#f1f2ed"; font.family: theme.uiFont; font.pixelSize: 26; font.weight: Font.DemiBold; wrapMode: Text.Wrap; Layout.fillWidth: true }
+                    Text { text: backend.selectedAuthor; color: theme.colors.textSecondary; font.family: theme.uiFont; font.pixelSize: 12 }
+                    Text { text: backend.selectedTitle || qsTr("Select a document"); color: theme.colors.textBright; font.family: theme.uiFont; font.pixelSize: 26; font.weight: Font.DemiBold; wrapMode: Text.Wrap; Layout.fillWidth: true }
                     Label { font.family: theme.uiFont;
                     visible: backend.error.length > 0
                     text: backend.error
-                    color: "#ffb4ab"
+                    color: theme.colors.error
                     wrapMode: Text.Wrap
                     Layout.fillWidth: true
                 }
-                    Rectangle { Layout.fillWidth: true; height: 1; color: "#383b40" }
+                    Rectangle { Layout.fillWidth: true; height: 1; color: theme.colors.borderStrong }
                     Item {
                     id: articleScroll
                     Layout.fillWidth: true; Layout.fillHeight: true
@@ -1113,7 +1152,7 @@ ApplicationWindow {
                         TextEdit {
                             id: articleText
                             objectName: "articleText"
-                            text: backend.busy && backend.selectedContent.length === 0 ? qsTr("Loading document…") : backend.formattedMarkdown(backend.selectedContent, theme.accent, theme.readerStyle)
+                            text: backend.busy && backend.selectedContent.length === 0 ? qsTr("Loading document…") : backend.formattedMarkdown(backend.selectedContent, theme.accent, theme.readerStyle, theme.colors)
                             textFormat: TextEdit.RichText
                             width: Math.min(articleFlickable.width, theme.readerStyle.contentWidth)
                             x: Math.max(0, (articleFlickable.width - width) / 2)
@@ -1131,7 +1170,7 @@ ApplicationWindow {
                             }
                             onSelectedTextChanged: cacheArticleSelection()
                             wrapMode: TextEdit.Wrap
-                            color: "#dedfd9"
+                            color: theme.colors.text
                             selectionColor: theme.accent
                             selectedTextColor: theme.accentForeground
                             font.family: theme.readerStyle.fontFamily; font.pixelSize: theme.readerStyle.fontSizePx
@@ -1201,7 +1240,7 @@ ApplicationWindow {
                     }
                     }
                 }
-                Rectangle { Layout.fillHeight: true; width: 1; color: "#34373c"; visible: reading }
+                Rectangle { Layout.fillHeight: true; width: 1; color: theme.colors.border; visible: reading }
                 ColumnLayout {
                     id: metadataPane
                     objectName: "documentMetadataPane"
@@ -1217,7 +1256,7 @@ ApplicationWindow {
                         id: metadataTabs
                         objectName: "metadataTabs"
                         Layout.fillWidth: true
-                        background: Rectangle { color: "#1d2025" }
+                        background: Rectangle { color: theme.colors.panel }
                         onCurrentIndexChanged: if (currentIndex === 1) notebookLoadTimer.restart()
                         TabButton { text: qsTr("Info"); font.family: theme.uiFont; objectName: "metadataInfoTab" }
                         TabButton { text: backend.selectedHighlights.length > 0 ? qsTr("Notebook · %1").arg(backend.selectedHighlights.length) : qsTr("Notebook"); font.family: theme.uiFont; objectName: "metadataNotebookTab" }
@@ -1236,7 +1275,7 @@ ApplicationWindow {
                         Layout.fillHeight: true
                         clip: true
                         ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
-                        background: Rectangle { color: "#1d2025" }
+                        background: Rectangle { color: theme.colors.panel }
                         ColumnLayout {
                             x: 17
                             y: 17
@@ -1246,26 +1285,26 @@ ApplicationWindow {
                                 visible: metadataTabs.currentIndex === 0
                                 Layout.fillWidth: true
                                 spacing: 14
-                        Text { text: qsTr("DOCUMENT DETAILS"); color: "#91968e"; font.family: theme.uiFont; font.pixelSize: 10; font.bold: true; Layout.fillWidth: true }
-                        Text { text: backend.selectedTitle || qsTr("Untitled document"); color: "#e6e8e1"; font.family: theme.uiFont; font.pixelSize: 13; font.weight: Font.DemiBold; wrapMode: Text.Wrap; Layout.fillWidth: true }
-                        Text { visible: !!selectedDocument().summary; text: selectedDocument().summary || ""; color: "#c1c4bd"; font.family: theme.uiFont; font.pixelSize: 11; wrapMode: Text.Wrap; Layout.fillWidth: true }
+                        Text { text: qsTr("DOCUMENT DETAILS"); color: theme.colors.textMuted; font.family: theme.uiFont; font.pixelSize: 10; font.bold: true; Layout.fillWidth: true }
+                        Text { text: backend.selectedTitle || qsTr("Untitled document"); color: theme.colors.textBright; font.family: theme.uiFont; font.pixelSize: 13; font.weight: Font.DemiBold; wrapMode: Text.Wrap; Layout.fillWidth: true }
+                        Text { visible: !!selectedDocument().summary; text: selectedDocument().summary || ""; color: theme.colors.textSecondary; font.family: theme.uiFont; font.pixelSize: 11; wrapMode: Text.Wrap; Layout.fillWidth: true }
                         GridLayout {
                             columns: 2
                             columnSpacing: 10
                             rowSpacing: 6
                             Layout.fillWidth: true
-                            Text { text: qsTr("Author"); color: "#8d928a"; font.family: theme.uiFont; font.pixelSize: 10 }
-                            Text { text: backend.selectedAuthor || "—"; color: "#d2d5ce"; font.family: theme.uiFont; font.pixelSize: 10; wrapMode: Text.Wrap; Layout.fillWidth: true }
-                            Text { text: qsTr("Source"); color: "#8d928a"; font.family: theme.uiFont; font.pixelSize: 10 }
-                            Text { text: selectedDocument().site_name || selectedDocument().source || "—"; color: "#d2d5ce"; font.family: theme.uiFont; font.pixelSize: 10; wrapMode: Text.Wrap; Layout.fillWidth: true }
-                            Text { text: qsTr("Type"); color: "#8d928a"; font.family: theme.uiFont; font.pixelSize: 10 }
-                            Text { text: selectedDocument().category || "—"; color: "#d2d5ce"; font.family: theme.uiFont; font.pixelSize: 10; wrapMode: Text.Wrap; Layout.fillWidth: true }
-                            Text { text: qsTr("Location"); color: "#8d928a"; font.family: theme.uiFont; font.pixelSize: 10 }
-                            Text { text: selectedDocument().location || backend.location; color: "#d2d5ce"; font.family: theme.uiFont; font.pixelSize: 10; wrapMode: Text.Wrap; Layout.fillWidth: true }
-                            Text { text: qsTr("Reading time"); color: "#8d928a"; font.family: theme.uiFont; font.pixelSize: 10 }
-                            Text { text: selectedDocument().reading_time || selectedDocument().listening_time || "—"; color: "#d2d5ce"; font.family: theme.uiFont; font.pixelSize: 10; wrapMode: Text.Wrap; Layout.fillWidth: true }
-                            Text { text: qsTr("Reading progress"); color: "#8d928a"; font.family: theme.uiFont; font.pixelSize: 10 }
-                            Text { text: Math.round(Number(selectedDocument().reading_progress) || 0) + "%"; color: "#d2d5ce"; font.family: theme.uiFont; font.pixelSize: 10; Layout.fillWidth: true }
+                            Text { text: qsTr("Author"); color: theme.colors.textMuted; font.family: theme.uiFont; font.pixelSize: 10 }
+                            Text { text: backend.selectedAuthor || "—"; color: theme.colors.textSecondary; font.family: theme.uiFont; font.pixelSize: 10; wrapMode: Text.Wrap; Layout.fillWidth: true }
+                            Text { text: qsTr("Source"); color: theme.colors.textMuted; font.family: theme.uiFont; font.pixelSize: 10 }
+                            Text { text: selectedDocument().site_name || selectedDocument().source || "—"; color: theme.colors.textSecondary; font.family: theme.uiFont; font.pixelSize: 10; wrapMode: Text.Wrap; Layout.fillWidth: true }
+                            Text { text: qsTr("Type"); color: theme.colors.textMuted; font.family: theme.uiFont; font.pixelSize: 10 }
+                            Text { text: selectedDocument().category || "—"; color: theme.colors.textSecondary; font.family: theme.uiFont; font.pixelSize: 10; wrapMode: Text.Wrap; Layout.fillWidth: true }
+                            Text { text: qsTr("Location"); color: theme.colors.textMuted; font.family: theme.uiFont; font.pixelSize: 10 }
+                            Text { text: selectedDocument().location || backend.location; color: theme.colors.textSecondary; font.family: theme.uiFont; font.pixelSize: 10; wrapMode: Text.Wrap; Layout.fillWidth: true }
+                            Text { text: qsTr("Reading time"); color: theme.colors.textMuted; font.family: theme.uiFont; font.pixelSize: 10 }
+                            Text { text: selectedDocument().reading_time || selectedDocument().listening_time || "—"; color: theme.colors.textSecondary; font.family: theme.uiFont; font.pixelSize: 10; wrapMode: Text.Wrap; Layout.fillWidth: true }
+                            Text { text: qsTr("Reading progress"); color: theme.colors.textMuted; font.family: theme.uiFont; font.pixelSize: 10 }
+                            Text { text: Math.round(Number(selectedDocument().reading_progress) || 0) + "%"; color: theme.colors.textSecondary; font.family: theme.uiFont; font.pixelSize: 10; Layout.fillWidth: true }
                         }
                         Button {
                             Layout.fillWidth: true
@@ -1275,8 +1314,8 @@ ApplicationWindow {
                             Material.roundedScale: Material.NotRounded
                             onClicked: backend.setDocumentSeen(selectedDocument().id || "", !documentIsSeen(selectedDocument()))
                         }
-                        Rectangle { Layout.fillWidth: true; height: 1; color: "#34373c" }
-                        Text { text: qsTr("TAGS"); color: "#91968e"; font.family: theme.uiFont; font.pixelSize: 10; font.bold: true; Layout.fillWidth: true }
+                        Rectangle { Layout.fillWidth: true; height: 1; color: theme.colors.border }
+                        Text { text: qsTr("TAGS"); color: theme.colors.textMuted; font.family: theme.uiFont; font.pixelSize: 10; font.bold: true; Layout.fillWidth: true }
                         Flow {
                             Layout.fillWidth: true
                             spacing: 6
@@ -1287,12 +1326,12 @@ ApplicationWindow {
                                     width: tagLabel.implicitWidth + (removeTag.visible ? 31 : 18)
                                     height: 26
                                     radius: 13
-                                    color: tagHover.hovered ? "#39402f" : "#2c3228"
-                                    border.color: "#46513b"
+                                    color: tagHover.hovered ? theme.colors.tagBackground : theme.colors.tagBackground
+                                    border.color: theme.colors.border
                                     Row {
                                         anchors.centerIn: parent
                                         spacing: 4
-                                        Text { id: tagLabel; text: modelData; color: "#cbd8b8"; font.family: theme.uiFont; font.pixelSize: 10; anchors.verticalCenter: parent.verticalCenter }
+                                        Text { id: tagLabel; text: modelData; color: theme.colors.textBright; font.family: theme.uiFont; font.pixelSize: 10; anchors.verticalCenter: parent.verticalCenter }
                                         ToolButton {
                                             id: removeTag
                                             text: "×"
@@ -1309,7 +1348,7 @@ ApplicationWindow {
                                     HoverHandler { id: tagHover }
                                 }
                             }
-                            Text { visible: backend.selectedTags.length === 0; text: qsTr("No tags"); color: "#858a83"; font.family: theme.uiFont; font.pixelSize: 10 }
+                            Text { visible: backend.selectedTags.length === 0; text: qsTr("No tags"); color: theme.colors.textMuted; font.family: theme.uiFont; font.pixelSize: 10 }
                         }
                         TextField { Material.roundedScale: Material.NotRounded; font.family: theme.uiFont;
                             id: newDocumentTagEditor
@@ -1345,8 +1384,8 @@ ApplicationWindow {
                                 visible: metadataTabs.currentIndex === 1
                                 Layout.fillWidth: true
                                 spacing: 14
-                        Rectangle { Layout.fillWidth: true; height: 1; color: "#34373c" }
-                        Text { text: qsTr("DOCUMENT NOTE"); color: "#91968e"; font.family: theme.uiFont; font.pixelSize: 10; font.bold: true; Layout.fillWidth: true }
+                        Rectangle { Layout.fillWidth: true; height: 1; color: theme.colors.border }
+                        Text { text: qsTr("DOCUMENT NOTE"); color: theme.colors.textMuted; font.family: theme.uiFont; font.pixelSize: 10; font.bold: true; Layout.fillWidth: true }
                         TextArea { Material.roundedScale: Material.NotRounded; font.family: theme.uiFont;
                             id: documentNoteEditor
                             objectName: "documentNoteEditor"
@@ -1363,10 +1402,10 @@ ApplicationWindow {
                             Layout.fillWidth: true
                             onClicked: backend.saveDocumentNote(selectedDocument().id || "", documentNoteEditor.text)
                         }
-                        Rectangle { Layout.fillWidth: true; height: 1; color: "#34373c" }
+                        Rectangle { Layout.fillWidth: true; height: 1; color: theme.colors.border }
                         RowLayout {
                             Layout.fillWidth: true
-                            Text { text: qsTr("HIGHLIGHTS"); color: "#91968e"; font.family: theme.uiFont; font.pixelSize: 10; font.bold: true; Layout.fillWidth: true }
+                            Text { text: qsTr("HIGHLIGHTS"); color: theme.colors.textMuted; font.family: theme.uiFont; font.pixelSize: 10; font.bold: true; Layout.fillWidth: true }
                             Text { text: backend.selectedHighlights.length; color: theme.accent; font.family: theme.uiFont; font.pixelSize: 10 }
                         }
                         Repeater {
@@ -1381,8 +1420,8 @@ ApplicationWindow {
                                 property bool editingTags: false
                                 Layout.fillWidth: true
                                 implicitHeight: highlightColumn.implicitHeight + 20
-                                color: "#25292e"
-                                border.color: "#383d43"
+                                color: theme.colors.surfaceAlt
+                                border.color: theme.colors.borderStrong
                                 radius: Math.min(2, theme.radius)
                                 ColumnLayout {
                                     id: highlightColumn
@@ -1391,7 +1430,7 @@ ApplicationWindow {
                                     spacing: 7
                                     Text {
                                         text: highlightCard.modelData.text || qsTr("Highlight")
-                                        color: "#e5e6e0"
+                                        color: theme.colors.text
                                         font.family: theme.uiFont; font.pixelSize: 11
                                         wrapMode: Text.Wrap
                                         Layout.fillWidth: true
@@ -1400,8 +1439,8 @@ ApplicationWindow {
                                         Layout.fillWidth: true
                                         implicitHeight: Math.max(highlightNotePreview.implicitHeight + 20, 42)
                                         radius: 3
-                                        color: "#1d2025"
-                                        border.color: "#343940"
+                                        color: theme.colors.panel
+                                        border.color: theme.colors.surfaceAlt
                                         visible: !highlightCard.editingNote
                                         RowLayout {
                                             anchors.fill: parent
@@ -1409,7 +1448,7 @@ ApplicationWindow {
                                             Text {
                                                 id: highlightNotePreview
                                                 text: highlightCard.modelData.notes || qsTr("Add a note to this highlight…")
-                                                color: highlightCard.modelData.notes ? "#c6c9c2" : "#858a83"
+                                                color: highlightCard.modelData.notes ? theme.colors.textSecondary : theme.colors.textMuted
                                                 font.family: theme.uiFont; font.pixelSize: 10
                                                 wrapMode: Text.Wrap
                                                 Layout.fillWidth: true
@@ -1513,7 +1552,7 @@ ApplicationWindow {
                         Text {
                             visible: !backend.busy && backend.selectedHighlights.length === 0
                             text: qsTr("No highlights yet. Select article text and save it with Highlight selection.")
-                            color: "#9da198"
+                            color: theme.colors.textMuted
                             font.family: theme.uiFont; font.pixelSize: 10
                             wrapMode: Text.Wrap
                             Layout.fillWidth: true
@@ -1529,8 +1568,8 @@ ApplicationWindow {
         Rectangle {
             Layout.fillWidth: true
             Layout.preferredHeight: 28
-            color: "#1d2025"
-            border.color: "#303238"
+            color: theme.colors.panel
+            border.color: theme.colors.borderStrong
             RowLayout {
                 anchors.fill: parent
                 anchors.leftMargin: 12
@@ -1548,18 +1587,18 @@ ApplicationWindow {
                     height: 7
                     radius: 4
                     visible: !backend.busy
-                    color: backend.error.length > 0 ? "#ffb4ab" : "#858a83"
+                    color: backend.error.length > 0 ? theme.colors.error : theme.colors.textMuted
                 }
                 Text {
                     text: backend.error.length > 0 ? backend.error : backend.status
-                    color: backend.error.length > 0 ? "#ffb4ab" : "#b7bbb3"
+                    color: backend.error.length > 0 ? theme.colors.error : theme.colors.textSecondary
                     font.family: theme.uiFont; font.pixelSize: 10
                     elide: Text.ElideRight
                     Layout.fillWidth: true
                 }
                 Text {
                     text: reading ? qsTr("Article") : locationLabel(backend.location)
-                    color: "#858a83"
+                    color: theme.colors.textMuted
                     font.family: theme.uiFont; font.pixelSize: 10
                 }
             }
@@ -1579,8 +1618,8 @@ ApplicationWindow {
         padding: 16
         standardButtons: Dialog.NoButton
         background: Rectangle {
-            color: "#25282e"
-            border.color: "#3a3d43"
+            color: theme.colors.surface
+            border.color: theme.colors.borderStrong
         }
         contentItem: ScrollView {
             clip: true
@@ -1593,7 +1632,7 @@ ApplicationWindow {
                 Layout.fillWidth: true
                 wrapMode: Text.Wrap
                 text: qsTr("Changes save to reader.toml and apply while Omawise is running.")
-                color: "#b7bbb3"
+                color: theme.colors.textSecondary
                 font.family: theme.uiFont
             }
             GridLayout {
@@ -1687,7 +1726,7 @@ ApplicationWindow {
             Label {
                 Layout.fillWidth: true
                 text: qsTr("External editors")
-                color: "#e4e5e0"
+                color: theme.colors.text
                 font.family: theme.uiFont
                 font.pixelSize: 13
                 font.weight: Font.DemiBold
@@ -1696,7 +1735,7 @@ ApplicationWindow {
                 Layout.fillWidth: true
                 wrapMode: Text.Wrap
                 text: qsTr("Choose which installed editors appear under Open in… . Editors that are not installed stay configured but are hidden from the menu.")
-                color: "#858a83"
+                color: theme.colors.textMuted
                 font.family: theme.uiFont
                 font.pixelSize: 10
             }
@@ -1717,14 +1756,14 @@ ApplicationWindow {
                 Layout.fillWidth: true
                 wrapMode: Text.Wrap
                 text: qsTr("Settings file: ~/.config/omawise/reader.toml")
-                color: "#858a83"
+                color: theme.colors.textMuted
                 font.family: theme.uiFont
                 font.pixelSize: 10
             }
             Label {
                 visible: theme.readerStyleError.length > 0
                 text: theme.readerStyleError
-                color: "#ffb4ab"
+                color: theme.colors.error
                 wrapMode: Text.Wrap
                 Layout.fillWidth: true
             }
@@ -1831,26 +1870,26 @@ ApplicationWindow {
         padding: 18
         title: qsTr("Readwise account")
         standardButtons: Dialog.NoButton
-        background: Rectangle { color: "#25282e"; border.color: "#3a3d43" }
+        background: Rectangle { color: theme.colors.surface; border.color: theme.colors.borderStrong }
         contentItem: ColumnLayout {
             spacing: 16
             Label {
                 Layout.fillWidth: true
                 wrapMode: Text.Wrap
-                color: "#c5c8c1"
+                color: theme.colors.textSecondary
                 font.family: theme.uiFont
                 text: qsTr("The official CLI sign-in enables hybrid search, highlights, and annotations. The optional Reader API token speeds up library and article loading and saves reading progress directly. Without the API token, Omawise uses the CLI for library and article loading too.")
             }
-            Rectangle { Layout.fillWidth: true; height: 1; color: "#3a3d43" }
+            Rectangle { Layout.fillWidth: true; height: 1; color: theme.colors.borderStrong }
             ColumnLayout {
                 Layout.fillWidth: true
                 spacing: 7
-                Label { text: qsTr("Readwise CLI"); color: "#e4e5e0"; font.family: theme.uiFont; font.pixelSize: 14; font.weight: Font.DemiBold }
+                Label { text: qsTr("Readwise CLI"); color: theme.colors.text; font.family: theme.uiFont; font.pixelSize: 14; font.weight: Font.DemiBold }
                 Label {
                     objectName: "cliAccountStatus"
                     Layout.fillWidth: true
                     wrapMode: Text.Wrap
-                    color: backend.authenticationRequired ? "#ffb4ab" : "#b7bbb3"
+                    color: backend.authenticationRequired ? theme.colors.error : theme.colors.textSecondary
                     font.family: theme.uiFont
                     text: backend.authenticationRequired
                           ? qsTr("Sign-in required. Continue to Readwise in your browser to connect.")
@@ -1864,7 +1903,7 @@ ApplicationWindow {
                     visible: backend.error.length > 0
                     Layout.fillWidth: true
                     wrapMode: Text.Wrap
-                    color: "#ffb4ab"
+                    color: theme.colors.error
                     font.family: theme.uiFont
                     text: backend.error
                 }
@@ -1879,21 +1918,21 @@ ApplicationWindow {
                 Label {
                     Layout.fillWidth: true
                     wrapMode: Text.Wrap
-                    color: "#858a83"
+                    color: theme.colors.textMuted
                     font.family: theme.uiFont
                     font.pixelSize: 10
                     text: qsTr("The official CLI currently has no standalone sign-out command. Its sign-in remains managed by the CLI.")
                 }
             }
-            Rectangle { Layout.fillWidth: true; height: 1; color: "#3a3d43" }
+            Rectangle { Layout.fillWidth: true; height: 1; color: theme.colors.borderStrong }
             ColumnLayout {
                 Layout.fillWidth: true
                 spacing: 7
-                Label { text: qsTr("Direct Reader API (optional)"); color: "#e4e5e0"; font.family: theme.uiFont; font.pixelSize: 14; font.weight: Font.DemiBold }
+                Label { text: qsTr("Direct Reader API (optional)"); color: theme.colors.text; font.family: theme.uiFont; font.pixelSize: 14; font.weight: Font.DemiBold }
                 Label {
                     Layout.fillWidth: true
                     wrapMode: Text.Wrap
-                    color: backend.needsApiToken ? "#ffb4ab" : "#b7bbb3"
+                    color: backend.needsApiToken ? theme.colors.error : theme.colors.textSecondary
                     font.family: theme.uiFont
                     text: backend.apiTokenAvailable
                           ? qsTr("Connected. The token is stored in your desktop keyring.")
@@ -1925,7 +1964,7 @@ ApplicationWindow {
                 visible: backend.apiLoginError.length > 0
                 Layout.fillWidth: true
                 wrapMode: Text.Wrap
-                color: "#ffb4ab"
+                color: theme.colors.error
                 font.family: theme.uiFont
                 text: backend.apiLoginError
             }
@@ -1956,14 +1995,14 @@ ApplicationWindow {
         padding: 18
         title: qsTr("Connect Readwise API")
         standardButtons: Dialog.NoButton
-        background: Rectangle { color: "#25282e"; border.color: "#3a3d43" }
+        background: Rectangle { color: theme.colors.surface; border.color: theme.colors.borderStrong }
         contentItem: ColumnLayout {
             spacing: 14
             Label {
                 text: qsTr("Paste a Readwise access token. Omawise validates it and stores it in your desktop keyring; it is never written to app settings or passed in command arguments.")
                 wrapMode: Text.Wrap
                 Layout.fillWidth: true
-                color: "#c5c8c1"
+                color: theme.colors.textSecondary
                 font.family: theme.uiFont
             }
             Button {
@@ -1989,7 +2028,7 @@ ApplicationWindow {
             Label {
                 visible: backend.apiLoginError.length > 0
                 text: backend.apiLoginError
-                color: "#ffb4ab"
+                color: theme.colors.error
                 wrapMode: Text.Wrap
                 Layout.fillWidth: true
             }
@@ -2039,7 +2078,7 @@ ApplicationWindow {
         padding: 10
         title: qsTr("Command palette")
         standardButtons: Dialog.NoButton
-        background: Rectangle { color: "#25282e"; border.color: "#3a3d43" }
+        background: Rectangle { color: theme.colors.surface; border.color: theme.colors.borderStrong }
         contentItem: ColumnLayout {
             spacing: 2
             Repeater {
@@ -2079,7 +2118,7 @@ ApplicationWindow {
         padding: 18
         title: qsTr("Save URL to Reader")
         standardButtons: Dialog.NoButton
-        background: Rectangle { color: "#25282e"; border.color: "#3a3d43" }
+        background: Rectangle { color: theme.colors.surface; border.color: theme.colors.borderStrong }
         contentItem: ColumnLayout {
             spacing: 14
             TextField {
@@ -2138,7 +2177,7 @@ ApplicationWindow {
         padding: 12
         title: qsTr("Keyboard shortcuts")
         standardButtons: Dialog.NoButton
-        background: Rectangle { color: "#25282e"; border.color: "#3a3d43" }
+        background: Rectangle { color: theme.colors.surface; border.color: theme.colors.borderStrong }
         onAccepted: showHelp = false
         contentItem: ScrollView {
             clip: true
@@ -2244,9 +2283,9 @@ ApplicationWindow {
         focus: false
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
         background: Rectangle {
-            color: "#29313a"
+            color: theme.colors.selection
             radius: 8
-            border.color: "#39434d"
+            border.color: theme.colors.borderStrong
         }
         contentItem: ListView {
             id: tagSuggestionList
@@ -2272,7 +2311,7 @@ ApplicationWindow {
                     newDocumentTagEditor.forceActiveFocus()
                 }
                 background: Rectangle {
-                    color: parent.hovered ? "#37414b" : "transparent"
+                    color: parent.hovered ? theme.colors.surfaceAlt : "transparent"
                 }
             }
         }

@@ -67,6 +67,48 @@ QStringList tagNames(const QJsonValue &value) {
     return tags;
 }
 
+bool containsFailedMove(const QJsonValue &value) {
+    if (value.isObject()) {
+        const QJsonObject object = value.toObject();
+        const QJsonValue success = object.value(QStringLiteral("success"));
+        if (success.isBool() && !success.toBool())
+            return true;
+        for (auto it = object.begin(); it != object.end(); ++it) {
+            if (containsFailedMove(it.value()))
+                return true;
+        }
+    } else if (value.isArray()) {
+        for (const QJsonValue &item : value.toArray()) {
+            if (containsFailedMove(item))
+                return true;
+        }
+    }
+    return false;
+}
+
+QString moveFailureMessage(const QJsonValue &value) {
+    if (value.isObject()) {
+        const QJsonObject object = value.toObject();
+        for (const QString &key : {QStringLiteral("error"), QStringLiteral("message"), QStringLiteral("reason")}) {
+            const QString message = object.value(key).toString().trimmed();
+            if (!message.isEmpty())
+                return message;
+        }
+        for (auto it = object.begin(); it != object.end(); ++it) {
+            const QString message = moveFailureMessage(it.value());
+            if (!message.isEmpty())
+                return message;
+        }
+    } else if (value.isArray()) {
+        for (const QJsonValue &item : value.toArray()) {
+            const QString message = moveFailureMessage(item);
+            if (!message.isEmpty())
+                return message;
+        }
+    }
+    return {};
+}
+
 int readingProgressPercent(const QJsonValue &value) {
     if (!value.isDouble())
         return 0;
@@ -254,8 +296,13 @@ Backend::Backend(QObject *parent) : QObject(parent) {
     connect(&m_process, &QProcess::errorOccurred, this, [this](QProcess::ProcessError error) {
         if (error == QProcess::FailedToStart) {
             const bool failedMetadata = m_operation == Operation::Highlights;
+            const bool failedMove = m_operation == Operation::Move;
             setBusy(false);
             m_operation = Operation::None;
+            if (failedMove) {
+                m_pendingId.clear();
+                clearPendingMove();
+            }
             if (failedMetadata) {
                 setMetadataBusy(false);
                 m_pendingHighlightEdit = PendingHighlightEdit::None;
@@ -799,6 +846,10 @@ void Backend::handleApiReply(QNetworkReply *reply) {
 
     if (m_timedOut) {
         m_timedOut = false;
+        if (operation == Operation::Move) {
+            m_pendingId.clear();
+            clearPendingMove();
+        }
         if (operation == Operation::ValidateApiToken) {
             setApiLoginBusy(false);
             setApiLoginError(tr("Token validation timed out. Check your connection and try again."));
@@ -920,6 +971,13 @@ void Backend::setBusy(bool busy) {
     emit busyChanged();
 }
 
+void Backend::clearPendingMove() {
+    if (m_pendingLocation.isEmpty())
+        return;
+    m_pendingLocation.clear();
+    emit pendingMoveLocationChanged();
+}
+
 void Backend::setMetadataBusy(bool busy) {
     if (m_metadataBusy == busy)
         return;
@@ -983,6 +1041,10 @@ void Backend::run(const QStringList &arguments, Operation operation) {
     clearError();
     const QString executable = QStandardPaths::findExecutable("readwise");
     if (executable.isEmpty()) {
+        if (operation == Operation::Move) {
+            m_pendingId.clear();
+            clearPendingMove();
+        }
         if (operation == Operation::Highlights) {
             setMetadataBusy(false);
             m_pendingHighlightEdit = PendingHighlightEdit::None;
@@ -1147,6 +1209,16 @@ void Backend::selectDocument(const QString &id, const QString &title, const QStr
     m_selectedTitle = title;
     m_selectedAuthor = author;
     m_selectedUrl = url;
+    m_selectedLocation = m_location;
+    for (const QVariant &value : m_documents) {
+        const QVariantMap row = value.toMap();
+        if (row.value("id").toString() != id)
+            continue;
+        const QString rowLocation = row.value("location").toString();
+        if (!rowLocation.isEmpty())
+            m_selectedLocation = rowLocation == "inbox" ? QStringLiteral("new") : rowLocation;
+        break;
+    }
     m_selectedNote = note;
     m_selectedTags = tags;
     m_selectedContent = m_contentCache.value(id);
@@ -1168,10 +1240,12 @@ void Backend::archiveDocument(const QString &id) {
 
 void Backend::moveDocument(const QString &id, const QString &location) {
     static const QStringList allowedLocations{"new", "later", "archive"};
-    if (id.isEmpty() || !allowedLocations.contains(location))
+    if (id.isEmpty() || !allowedLocations.contains(location) || m_busy
+        || m_process.state() != QProcess::NotRunning || m_apiReply)
         return;
     m_pendingId = id;
     m_pendingLocation = location;
+    emit pendingMoveLocationChanged();
     setStatus(tr("Moving document…"));
     run({"--json", "reader-move-documents", "--document-ids", id, "--location", location}, Operation::Move);
 }
@@ -1606,7 +1680,8 @@ bool Backend::openArticleInEditor(const QString &editorId, const QString &conten
 }
 
 QString Backend::formattedMarkdown(const QString &markdown, const QString &accent,
-                                  const QVariantMap &readerStyle) const {
+                                  const QVariantMap &readerStyle,
+                                  const QVariantMap &themeColors) const {
     const QString fontFamily = readerStyle.value("fontFamily", "monospace").toString();
     const int fontSizePx = qBound(12, readerStyle.value("fontSizePx", 12).toInt(), 48);
     const double lineSpacing = qBound(1.0, readerStyle.value("lineSpacing", 1.2).toDouble(), 2.2);
@@ -1625,25 +1700,37 @@ QString Backend::formattedMarkdown(const QString &markdown, const QString &accen
     document.setDefaultFont(documentFont);
     const QColor accentColor(accent);
     const QString linkColor = accentColor.isValid() ? accentColor.name(QColor::HexRgb) : QStringLiteral("#FFD60A");
+    const auto color = [&themeColors](const QString &key, const QString &fallback) {
+        const QColor value(themeColors.value(key).toString());
+        return value.isValid() ? value.name(QColor::HexRgb) : fallback;
+    };
+    const QString textColor = color("text", "#d9dbd5");
+    const QString brightTextColor = color("textBright", "#f2f3ee");
+    const QString secondaryTextColor = color("textSecondary", "#b6bbae");
+    const QString panelColor = color("panel", "#22262a");
+    const QString surfaceAltColor = color("surfaceAlt", "#292e2c");
+    const QString borderColor = color("border", "#343940");
     document.setDefaultStyleSheet(QStringLiteral(R"CSS(
-        body { color: #d9dbd5; font-family: "%2"; font-size: %3px; margin: 0; padding: 0; }
+        body { color: %5; font-family: "%2"; font-size: %3px; margin: 0; padding: 0; }
         p { margin-top: 0; margin-bottom: %4pt; }
-        h1 { color: #f2f3ee; font-size: 23pt; font-weight: 700; margin-top: 8pt; margin-bottom: 18pt; }
-        h2 { color: #eef0e9; font-size: 18pt; font-weight: 650; margin-top: 25pt; margin-bottom: 11pt; }
-        h3 { color: #e7e9e2; font-size: 14pt; font-weight: 650; margin-top: 20pt; margin-bottom: 9pt; }
-        h4, h5, h6 { color: #e2e4dd; font-size: 12pt; font-weight: 650; margin-top: 16pt; margin-bottom: 7pt; }
+        h1, h2, h3, h4, h5, h6 { color: %6; }
+        h1 { font-size: 23pt; font-weight: 700; margin-top: 8pt; margin-bottom: 18pt; }
+        h2 { font-size: 18pt; font-weight: 650; margin-top: 25pt; margin-bottom: 11pt; }
+        h3 { font-size: 14pt; font-weight: 650; margin-top: 20pt; margin-bottom: 9pt; }
+        h4, h5, h6 { font-size: 12pt; font-weight: 650; margin-top: 16pt; margin-bottom: 7pt; }
         a { color: %1; text-decoration: none; }
-        blockquote { color: #b6bbae; background-color: #22262a; border-left: 3px solid %1; margin: 12pt 0; padding: 8pt 13pt; }
-        pre { color: #e1e5d9; background-color: #22262a; border: 1px solid #343940; margin: 10pt 0; padding: 11pt; }
-        code { color: #e3e9d2; background-color: #292e2c; }
+        blockquote { color: %7; background-color: %8; border-left: 3px solid %1; margin: 12pt 0; padding: 8pt 13pt; }
+        pre { color: %6; background-color: %8; border: 1px solid %10; margin: 10pt 0; padding: 11pt; }
+        code { color: %6; background-color: %9; }
         li { margin-bottom: 5pt; }
         ul, ol { margin-top: 4pt; margin-bottom: 12pt; }
         table { border-collapse: collapse; margin: 12pt 0; }
-        th { color: #f0f1eb; background-color: #2a2e33; font-weight: 650; }
-        td, th { border: 1px solid #41464c; padding: 6pt 8pt; }
-        hr { color: #41464c; }
+        th { color: %6; background-color: %8; font-weight: 650; }
+        td, th { border: 1px solid %10; padding: 6pt 8pt; }
+        hr { color: %10; }
         img { max-width: 100%; }
-    )CSS").arg(linkColor, fontFamily).arg(fontSizePx).arg(paragraphSpacing));
+    )CSS").arg(linkColor, fontFamily).arg(fontSizePx).arg(paragraphSpacing)
+                      .arg(textColor, brightTextColor, secondaryTextColor, panelColor, surfaceAltColor, borderColor));
 
     if (isHtmlContent(markdown)) {
         document.setHtml(markdown);
@@ -1936,6 +2023,10 @@ void Backend::finish(int exitCode, QProcess::ExitStatus exitStatus) {
     }
 
     if (exitStatus != QProcess::NormalExit || exitCode != 0) {
+        if (operation == Operation::Move) {
+            m_pendingId.clear();
+            clearPendingMove();
+        }
         if (operation == Operation::Highlights) {
             setMetadataBusy(false);
             m_pendingHighlightEdit = PendingHighlightEdit::None;
@@ -1999,6 +2090,10 @@ void Backend::finish(int exitCode, QProcess::ExitStatus exitStatus) {
         return;
     }
     if (parseError.error != QJsonParseError::NoError) {
+        if (operation == Operation::Move) {
+            m_pendingId.clear();
+            clearPendingMove();
+        }
         if (operation == Operation::Highlights) {
             setMetadataBusy(false);
             m_pendingHighlightEdit = PendingHighlightEdit::None;
@@ -2013,6 +2108,10 @@ void Backend::finish(int exitCode, QProcess::ExitStatus exitStatus) {
         const QJsonObject root = json.object();
         const QString error = root.value("error").toString();
         if (root.value("isError").toBool() || !error.isEmpty()) {
+            if (operation == Operation::Move) {
+                m_pendingId.clear();
+                clearPendingMove();
+            }
             if (operation == Operation::Highlights) {
                 setMetadataBusy(false);
                 m_pendingHighlightEdit = PendingHighlightEdit::None;
@@ -2215,11 +2314,23 @@ void Backend::finish(int exitCode, QProcess::ExitStatus exitStatus) {
         refresh();
         break;
     case Operation::Move:
+        if (containsFailedMove(json.isObject() ? QJsonValue(json.object()) : QJsonValue(json.array()))) {
+            const QString message = moveFailureMessage(json.isObject() ? QJsonValue(json.object())
+                                                                         : QJsonValue(json.array()));
+            setStatus(tr("Document move failed"));
+            fail(message.isEmpty() ? tr("Readwise could not move the document.") : message);
+            m_pendingId.clear();
+            clearPendingMove();
+            break;
+        }
         QFile::remove(persistentLibraryCachePath(m_location));
-        updateDocumentRows("location", m_pendingLocation);
+        updateDocumentRows("location", m_pendingLocation, m_pendingId);
+        if (m_selectedId == m_pendingId)
+            m_selectedLocation = m_pendingLocation;
+        emit selectedDocumentChanged();
         setStatus(tr("Document moved to %1").arg(m_pendingLocation));
         m_pendingId.clear();
-        m_pendingLocation.clear();
+        clearPendingMove();
         break;
     case Operation::SaveUrl:
         setStatus(tr("URL saved to Reader"));

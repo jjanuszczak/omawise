@@ -207,10 +207,7 @@ Theme::~Theme() {
 }
 
 QString Theme::accentForeground() const {
-    const QColor color(m_accent);
-    auto linear = [](double value) { return value <= 0.04045 ? value / 12.92 : std::pow((value + 0.055) / 1.055, 2.4); };
-    const double luminance = 0.2126 * linear(color.redF()) + 0.7152 * linear(color.greenF()) + 0.0722 * linear(color.blueF());
-    return luminance > 0.179 ? "black" : "white";
+    return m_colors.value("accentForeground", QStringLiteral("white")).toString();
 }
 
 void Theme::refreshRounding() {
@@ -227,26 +224,77 @@ void Theme::reload() {
     QString ancestor = m_directory;
     while (!QFileInfo::exists(ancestor) && ancestor != "/")
         ancestor = QFileInfo(ancestor).absolutePath();
-    for (const QString &path : {ancestor, QFileInfo(ancestor).absolutePath(), m_directory,
+    const QString stateDirectory = QFileInfo(m_directory).absolutePath();
+    for (const QString &path : {ancestor, QFileInfo(ancestor).absolutePath(), stateDirectory,
+                                stateDirectory + "/theme.name", m_directory,
                                 m_directory + "/theme", m_directory + "/theme/colors.toml"}) {
         if (QFileInfo::exists(path) && !m_watcher.files().contains(path) && !m_watcher.directories().contains(path))
             m_watcher.addPath(path);
     }
 
-    QString accent = "#FFD60A";
+    QVariantMap source{
+        {"mode", "dark"}, {"accent", "#FFD60A"}, {"selection", "#30352a"},
+        {"muted", "#858a83"}, {"background", "#25282e"}, {"dark_background", "#1d2025"},
+        {"darker_background", "#17191d"}, {"lighter_background", "#272a2f"},
+        {"foreground", "#e4e5e0"}, {"dark_foreground", "#858a83"},
+        {"light_foreground", "#b7bbb3"}, {"bright_foreground", "#f0f1ed"},
+        {"red", "#ffb4ab"}, {"yellow", "#e4dfce"}, {"green", "#8bcbb1"}
+    };
     QFile file(m_directory + "/theme/colors.toml");
     if (file.open(QIODevice::ReadOnly)) {
-        const QRegularExpression expression(R"re(^\s*accent\s*=\s*["'](#[0-9a-fA-F]{6})["'])re",
-                                            QRegularExpression::MultilineOption);
-        const auto match = expression.match(QString::fromUtf8(file.readAll()));
-        if (match.hasMatch())
-            accent = match.captured(1);
+        const QString contents = QString::fromUtf8(file.readAll());
+        const QRegularExpression expression(
+            R"re(^\s*([A-Za-z_][A-Za-z0-9_-]*)\s*=\s*(?:["']([^"']*)["']|(#[0-9a-fA-F]{6}))\s*(?:#.*)?$)re",
+            QRegularExpression::MultilineOption);
+        auto matches = expression.globalMatch(contents);
+        while (matches.hasNext()) {
+            const auto match = matches.next();
+            const QString key = match.captured(1);
+            if (key == "mode") {
+                const QString mode = match.captured(2).toLower();
+                if (mode == "dark" || mode == "light") source[key] = mode;
+            } else if (source.contains(key)) {
+                const QString value = match.captured(3).isEmpty() ? match.captured(2) : match.captured(3);
+                if (QColor(value).isValid()) source[key] = QColor(value).name(QColor::HexRgb);
+            }
+        }
     }
-    if (accent != m_accent) {
-        m_accent = accent;
+
+    QVariantMap colors{
+        {"window", source.value("darker_background")}, {"panel", source.value("dark_background")},
+        {"surface", source.value("background")}, {"surfaceAlt", source.value("lighter_background")},
+        {"border", source.value("muted")}, {"borderStrong", source.value("dark_foreground")},
+        {"text", source.value("foreground")}, {"textBright", source.value("bright_foreground")},
+        {"textSecondary", source.value("light_foreground")}, {"textMuted", source.value("dark_foreground")},
+        {"accent", source.value("accent")}, {"selection", source.value("selection")},
+        {"error", source.value("red")}, {"warning", source.value("yellow")},
+        {"success", source.value("green")}
+    };
+    const QColor accentColor(colors.value("accent").toString());
+    const auto linear = [](double value) {
+        return value <= 0.04045 ? value / 12.92 : std::pow((value + 0.055) / 1.055, 2.4);
+    };
+    const double luminance = 0.2126 * linear(accentColor.redF())
+        + 0.7152 * linear(accentColor.greenF())
+        + 0.0722 * linear(accentColor.blueF());
+    colors["accentForeground"] = luminance > 0.45 ? QStringLiteral("#101315") : QStringLiteral("#ffffff");
+    colors["tagBackground"] = source.value("selection");
+    QColor scrim(colors.value("window").toString());
+    scrim.setAlpha(217);
+    colors["scrim"] = scrim.name(QColor::HexArgb);
+
+    const QString accent = colors.value("accent").toString();
+    const QString colorScheme = source.value("mode").toString();
+    const bool changedColors = colors != m_colors || colorScheme != m_colorScheme || accent != m_accent;
+    m_colors = colors;
+    m_colorScheme = colorScheme;
+    m_accent = accent;
+    if (changedColors) {
         if (qobject_cast<QGuiApplication *>(QCoreApplication::instance())) {
             QPalette palette = QGuiApplication::palette();
             palette.setColor(QPalette::Link, QColor(m_accent));
+            palette.setColor(QPalette::Highlight, QColor(colors.value("selection").toString()));
+            palette.setColor(QPalette::HighlightedText, QColor(colors.value("textBright").toString()));
             QGuiApplication::setPalette(palette);
         }
         emit changed();
