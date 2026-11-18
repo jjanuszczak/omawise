@@ -71,14 +71,14 @@
 - `./bin/package` creates a local Arch package from the current checkout without installing it; `./bin/install` builds and installs the checkout through `makepkg`/`pacman`. Both use `build/makepkg/` for makepkg's work directory so `--cleanbuild` cannot collide with the project's `src/` folder.
 - `.github/workflows/release.yml` runs on `v*` tags, verifies the tag equals `v<pkgver>`, builds and checks in Arch Linux, then creates a GitHub Release with the `.pkg.tar.zst` package attached.
 - To publish a release, update `pkgver` in `PKGBUILD`, commit, and push the matching tag. The package currently targets x86_64 Arch Linux/Omarchy. A user can install the downloaded asset with `sudo pacman -U ./omawise-*.pkg.tar.zst`.
-- Release `v0.1.4` is published at <https://github.com/jjanuszczak/omawise/releases/tag/v0.1.4> with `omawise-0.1.4-1-x86_64.pkg.tar.zst` attached. Its GitHub Actions build, tests, package assembly, and release upload all passed.
+- Release `v0.1.5` is published at <https://github.com/jjanuszczak/omawise/releases/tag/v0.1.5> with `omawise-0.1.5-1-x86_64.pkg.tar.zst` attached. Its GitHub Actions build, tests, package assembly, and release upload all passed.
 
 Do not issue account calls during routine development; use a fake `readwise` executable for interaction checks unless the user explicitly asks to test against a real account.
 
 ## Verification already performed
 
 - The app compiles with the available Qt 6.12 toolchain. The full offscreen suite reports 21 Qt Test passes including setup and cleanup. List-row progress and seen fields are normalized for older cached entries so the QML delegate always initializes.
-- The repository's QML interaction test uses a fake CLI and verifies search submission, keyboard document activation, the Open action, article focus and paragraph/word selection, highlight creation through the shortcut and toolbar, inline document note/tag editing, API token dialog masking/clearing, Readwise account dialog access and CLI connection status, and highlight refresh after creation. Coverage includes retained paragraph margins after Markdown conversion, reader settings defaults, live TOML reload and value bounds; persistent cache load/clear/expiry; cached library load; failed-refresh fallback; file permissions; title-search `document_id` normalization; highlight refresh before edits; and cache-backed QML frame timings.
+- The repository's QML interaction test uses a fake CLI and verifies search submission, keyboard document activation, the Open action, article focus and paragraph/word selection, highlight creation through the shortcut and toolbar, inline document note/tag editing, API token dialog masking/clearing, Readwise account dialog access and CLI connection status, and highlight refresh after creation. Coverage includes retained paragraph margins after Markdown conversion, reader settings defaults, live TOML reload and value bounds; persistent cache load/clear/expiry; cached library load; failed-refresh fallback; file permissions; title-search `document_id` normalization; highlight refresh before edits; move-result failures and pending-location UI; and cache-backed QML frame timings.
 - `bin/test` sets `QT_QPA_PLATFORM=offscreen` and `QT_QPA_PLATFORMTHEME=generic` so GUI checks do not depend on the host desktop session.
 - The CLI sign-in prompt is hidden normally and appears only when CLI error text indicates an authentication failure; it leads to account settings and the official CLI OAuth flow. The sidebar footer and command palette also open account settings directly. The app does not inspect CLI credential files. The separate API token flow stores its token in Secret Service and can be replaced or disconnected from account settings.
 - `./bin/package --cleanbuild` succeeds locally without deleting or modifying the project's `src/` files. Release `v0.1.3` repeated the clean package build successfully in GitHub Actions; the package has not yet been installed locally.
@@ -95,7 +95,7 @@ Do not issue account calls during routine development; use a fake `readwise` exe
 - The exact earlier metadata-write failure remains unclassified because its error details were not saved. The current same-value account write/readback path succeeded without changing the note.
 - The local development package has been assembled successfully, but it has not been installed or launched from the installed package.
 - GitHub Actions reported non-blocking Node.js 20 deprecation annotations for the v4 actions and a future `ubuntu-latest` image migration; update runner/action versions when needed.
-- Current published release commit `c0a5b04` (`chore: prepare v0.1.4 release`) is tagged `v0.1.4`. The `0.1.5` release commit and tag are being prepared from the merged `main` state.
+- Current published release commit `d80bff5` (`fix: preserve inline code in HTML Markdown export`) is tagged `v0.1.5`. Release `v0.1.6` is being prepared from the merged `main` state.
 
 ## Suggested next steps
 
