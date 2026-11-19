@@ -43,6 +43,7 @@ private slots:
     void documentNoteReportsPerItemFailure();
     void highlightMetadataUsesSupportedCliCommands();
     void markdownIsFormattedAsRichText();
+    void markdownMarksSavedHighlightsInArticleText();
     void markdownKeepsParagraphSpacingInRichText();
     void copyArticleMarkdownAddsYamlFrontmatter();
     void readerStyleUsesDefaultsAndReloadsBoundedToml();
@@ -75,13 +76,13 @@ void BackendTests::initTestCase() {
     cli.write("#!/bin/sh\n"
               "printf '%s\\n' \"$*\" >> \"$OMAWISE_TEST_LOG\"\n"
               "case \"$*\" in\n"
-              "  *reader-bulk-edit-document-metadata*) if [ \"$OMAWISE_NOTE_FAILURE\" = 1 ]; then printf '%s\\n' '{\"results\":[{\"id\":\"doc-42\",\"success\":false,\"error\":\"Document not found\"}]}' ; else printf '%s\\n' '{\"results\":[{\"id\":\"doc-42\",\"success\":true}]}' ; fi ;;\n"
+              "  *reader-bulk-edit-document-metadata*) if [ \"$OMAWISE_NOTE_DELAY\" = 1 ]; then sleep 0.25; fi; if [ \"$OMAWISE_NOTE_FAILURE\" = 1 ]; then printf '%s\\n' '{\"results\":[{\"id\":\"doc-42\",\"success\":false,\"error\":\"Document not found\"}]}' ; else printf '%s\\n' '{\"results\":[{\"id\":\"doc-42\",\"success\":true}]}' ; fi ;;\n"
               "  *--title-search*) printf '%s\\n' '{\"results\":[{\"document_id\":\"title-only\",\"title\":\"Title-only result\"}]}' ;;\n"
               "  *reader-search-documents*) printf '%s\\n' '{\"results\":[{\"id\":\"remote\",\"title\":\"Remote result\"}]}' ;;\n"
               "  *--page-cursor*) if [ \"$OMAWISE_PAGINATION_TEST\" = 1 ]; then printf '%s\\n' '{\"results\":[{\"id\":\"second\",\"title\":\"Second page\"},{\"id\":\"local\",\"title\":\"Duplicate row\"}],\"nextPageCursor\":null}' ; else printf '%s\\n' '{\"results\":[]}' ; fi ;;\n"
               "  *reader-list-documents*) if [ \"$OMAWISE_AUTH_FAILURE\" = 1 ]; then printf '%s\\n' '401 Unauthorized' >&2; exit 1; elif [ \"$OMAWISE_PROGRESS_FIXTURE\" = 1 ]; then printf '%s\\n' '{\"results\":[{\"id\":\"local\",\"title\":\"Local article\",\"author\":\"A. Writer\",\"reading_progress\":0.37}]}' ; elif [ \"$OMAWISE_PAGINATION_TEST\" = 1 ]; then printf '%s\\n' '{\"results\":[{\"id\":\"local\",\"title\":\"Local article\",\"author\":\"A. Writer\"}],\"nextPageCursor\":\"cursor-1\"}' ; else printf '%s\\n' '{\"results\":[{\"id\":\"local\",\"title\":\"Local article\",\"author\":\"A. Writer\"}]}' ; fi ;;\n"
               "  *reader-get-document-details*) if [ \"$OMAWISE_DETAIL_FAIL\" = 1 ]; then printf '%s\\n' 'temporary detail failure' >&2; exit 1; elif [ \"$OMAWISE_DETAIL_DELAY\" = 1 ]; then sleep 1; fi; if [ \"$OMAWISE_DETAIL_JSON_STRING\" = 1 ]; then printf '%s\\n' '\"# JSON article\\n\\nBody paragraph.\"' ; elif [ \"$OMAWISE_FORMATTING_FIXTURE\" = 1 ]; then printf '%s\\n' '# Article' '' '## Section heading' '' 'First paragraph for selection with several lines of text to check readable measure and line spacing.' '' 'Second paragraph for keyboard navigation.' '' '> A useful blockquote for the article preview.' '' '- First list item' '- Second list item' '' '`inline code` and [a sample link](https://example.com).' '' '```cpp' 'int answer = 42;' '```' ; else printf '%s\\n' '# Article' '' 'First paragraph for selection.' '' 'Second paragraph for keyboard navigation.' ; fi ;;\n"
-              "  *reader-set-highlight-notes*) printf '%s\\n' '{\"success\":true}' ;;\n"
+              "  *reader-set-highlight-notes*) if [ \"$OMAWISE_NOTE_DELAY\" = 1 ]; then sleep 0.25; fi; printf '%s\\n' '{\"success\":true}' ;;\n"
               "  *reader-add-tags-to-highlight*) printf '%s\\n' '{\"success\":true}' ;;\n"
               "  *reader-remove-tags-from-highlight*) printf '%s\\n' '{\"success\":true}' ;;\n"
               "  *reader-move-documents*) if [ \"$OMAWISE_MOVE_DELAY\" = 1 ]; then sleep 0.3; fi; if [ \"$OMAWISE_MOVE_FAILURE\" = 1 ]; then printf '%s\\n' '{\"results\":[{\"id\":\"local\",\"success\":false,\"error\":\"Document not found\"}]}' ; else printf '%s\\n' '{\"success\":true}' ; fi ;;\n"
@@ -215,24 +216,42 @@ void BackendTests::authenticationErrorsAreDetectedAndClearedOnRetry() {
 
 void BackendTests::documentNoteUsesBulkMetadataCommand() {
     Backend backend;
+    backend.selectDocument("doc-42", "Article", "", "");
+    QSignalSpy documentsSpy(&backend, &Backend::documentsChanged);
+    qputenv("OMAWISE_NOTE_DELAY", "1");
     backend.saveDocumentNote("doc-42", "A careful note");
-    QTRY_VERIFY_WITH_TIMEOUT(!backend.busy(), 3000);
+    QCOMPARE(backend.selectedNote(), QString("A careful note"));
+    QVERIFY(!backend.busy());
+    QVERIFY(backend.noteSyncBusy());
+    QCOMPARE(documentsSpy.count(), 0);
+    QTRY_VERIFY_WITH_TIMEOUT(!backend.noteSyncBusy(), 3000);
     QCOMPARE(backend.selectedNote(), QString("A careful note"));
     QCOMPARE(backend.status(), QString("Note saved"));
+    backend.saveDocumentNote("doc-42", "");
+    QCOMPARE(backend.selectedNote(), QString());
+    QTRY_VERIFY_WITH_TIMEOUT(!backend.noteSyncBusy(), 3000);
+    QCOMPARE(documentsSpy.count(), 0);
+    qunsetenv("OMAWISE_NOTE_DELAY");
 
     QFile log(m_logPath);
     QVERIFY(log.open(QIODevice::ReadOnly | QIODevice::Text));
     QVERIFY(log.readAll().contains(
         "reader-bulk-edit-document-metadata --documents [{\"document_id\":\"doc-42\",\"notes\":\"A careful note\"}]"));
+    QFile clearLog(m_logPath);
+    QVERIFY(clearLog.open(QIODevice::ReadOnly | QIODevice::Text));
+    QVERIFY(clearLog.readAll().contains(
+        "reader-bulk-edit-document-metadata --documents [{\"document_id\":\"doc-42\",\"notes\":\"\"}]"));
 }
 
 void BackendTests::documentNoteReportsPerItemFailure() {
     qputenv("OMAWISE_NOTE_FAILURE", "1");
     Backend backend;
+    backend.selectDocument("doc-42", "Article", "", "");
     backend.saveDocumentNote("doc-42", "A careful note");
-    QTRY_VERIFY_WITH_TIMEOUT(!backend.busy(), 3000);
+    QCOMPARE(backend.selectedNote(), QString("A careful note"));
+    QTRY_VERIFY_WITH_TIMEOUT(!backend.noteSyncBusy(), 3000);
     QVERIFY(backend.error().contains("Document not found"));
-    QVERIFY(backend.selectedNote().isEmpty());
+    QCOMPARE(backend.selectedNote(), QString("A careful note"));
     qunsetenv("OMAWISE_NOTE_FAILURE");
 }
 
@@ -244,9 +263,13 @@ void BackendTests::highlightMetadataUsesSupportedCliCommands() {
     QCOMPARE(backend.selectedTags(), QStringList({"retained-tag"}));
     QCOMPARE(backend.selectedNote(), QString("retained note"));
 
+    qputenv("OMAWISE_NOTE_DELAY", "1");
     backend.saveHighlightNote("doc-42", "highlight-1", "A useful annotation");
-    QTRY_VERIFY_WITH_TIMEOUT(!backend.busy(), 3000);
+    QVERIFY(!backend.busy());
+    QVERIFY(backend.noteSyncBusy());
+    QTRY_VERIFY_WITH_TIMEOUT(!backend.noteSyncBusy(), 3000);
     QCOMPARE(backend.selectedHighlights().first().toMap().value("notes").toString(), QString("A useful annotation"));
+    qunsetenv("OMAWISE_NOTE_DELAY");
 
     backend.addHighlightTags("doc-42", "highlight-1", {"field notes", "Research"});
     QTRY_VERIFY_WITH_TIMEOUT(!backend.busy(), 3000);
@@ -277,6 +300,20 @@ void BackendTests::markdownIsFormattedAsRichText() {
     QVERIFY(html.contains("Heading"));
     QVERIFY(html.contains("href=\"https://example.com\""));
     QVERIFY(html.contains("#12ab34", Qt::CaseInsensitive));
+}
+
+void BackendTests::markdownMarksSavedHighlightsInArticleText() {
+    Backend backend;
+    const QVariantList highlights{QVariantMap{{"text", "A saved passage across\nparagraph wrapping."}}};
+    const QString html = backend.formattedMarkdown("Before.\n\nA saved passage across paragraph wrapping.\n\nAfter.",
+                                                   "#12ab34", {}, {}, highlights);
+    QTextDocument rendered;
+    rendered.setHtml(html);
+    QTextCursor cursor = rendered.find(QStringLiteral("saved passage"));
+    QVERIFY(!cursor.isNull());
+    QCOMPARE(cursor.charFormat().background().color(), QColor(QStringLiteral("#4b481f")));
+    QCOMPARE(cursor.charFormat().underlineColor(), QColor(QStringLiteral("#c6bd32")));
+    QVERIFY(rendered.toPlainText().contains(QStringLiteral("A saved passage across paragraph wrapping.")));
 }
 
 void BackendTests::markdownKeepsParagraphSpacingInRichText() {
@@ -765,6 +802,8 @@ void BackendTests::qmlSearchActivationAndReaderSelection() {
         QRect(QPoint(0, 0), QSize(window->width(), window->height())).contains(noteSavePoint()), 2000);
     noteEditor->setProperty("text", QStringLiteral("A note from the metadata pane"));
     QVERIFY(clickObject(noteSave));
+    QCOMPARE(backend.selectedNote(), QString("A note from the metadata pane"));
+    QTRY_VERIFY_WITH_TIMEOUT(!backend.noteSyncBusy(), 3000);
     QTRY_VERIFY_WITH_TIMEOUT(!backend.busy(), 3000);
     QCOMPARE(backend.selectedNote(), QString("A note from the metadata pane"));
 
@@ -800,9 +839,32 @@ void BackendTests::qmlSearchActivationAndReaderSelection() {
     QTRY_VERIFY_WITH_TIMEOUT(!backend.busy(), 3000);
     QCOMPARE(backend.selectedTags(), QStringList({"shared", "alpha", "beta"}));
 
+    metadataTabs->setProperty("currentIndex", 1);
     QObject *highlightRepeater = window->findChild<QObject *>(QStringLiteral("highlightRepeater"));
     QVERIFY(highlightRepeater);
     QTRY_COMPARE_WITH_TIMEOUT(highlightRepeater->property("count").toInt(), 1, 2000);
+    QQuickItem *highlightCard = nullptr;
+    QVERIFY(QMetaObject::invokeMethod(highlightRepeater, "itemAt", Q_RETURN_ARG(QQuickItem *, highlightCard), Q_ARG(int, 0)));
+    QVERIFY(highlightCard);
+    QVERIFY(clickObject(highlightCard));
+    QObject *highlightActionsButton = highlightCard->findChild<QObject *>(QStringLiteral("highlightActionsButton"));
+    QObject *highlightActionsMenu = highlightCard->findChild<QObject *>(QStringLiteral("highlightActionsMenu"));
+    QVERIFY(highlightActionsButton);
+    QVERIFY(highlightActionsMenu);
+    QVERIFY(QMetaObject::invokeMethod(highlightActionsButton, "clicked"));
+    QTRY_VERIFY_WITH_TIMEOUT(highlightActionsMenu->property("visible").toBool(), 1000);
+    QObject *editHighlightTagsAction = highlightCard->findChild<QObject *>(QStringLiteral("highlightEditTagsAction"));
+    QVERIFY(editHighlightTagsAction);
+    QVERIFY(QMetaObject::invokeMethod(editHighlightTagsAction, "triggered"));
+    QObject *highlightTagEditor = highlightCard->findChild<QObject *>(QStringLiteral("highlightTagEditor"));
+    QVERIFY(highlightTagEditor);
+    QVERIFY(highlightCard->property("editingTags").toBool());
+    highlightCard->setProperty("editingTags", false);
+    QObject *notePreview = highlightCard->findChild<QObject *>(QStringLiteral("highlightNotePreviewCard"));
+    QVERIFY(notePreview);
+    QVERIFY(QMetaObject::invokeMethod(notePreview, "clicked"));
+    QTRY_VERIFY_WITH_TIMEOUT(highlightCard->property("editingNote").toBool(), 1000);
+    QVERIFY(highlightCard->findChild<QObject *>(QStringLiteral("highlightNoteEditor")));
 
     engine.rootObjects().first()->setProperty("showHelp", true);
     QTRY_VERIFY(window->findChild<QObject *>(QStringLiteral("helpCloseButton")) != nullptr);

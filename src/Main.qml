@@ -12,10 +12,12 @@ ApplicationWindow {
     minimumHeight: 650
     title: qsTr("Omawise")
     onClosing: function(close) {
-        if (allowWindowClose || !reading || !backend.selectedContent)
+        if (allowWindowClose)
             return
-        saveCurrentProgress(true)
-        if (backend.busy || backend.progressBusy || Object.keys(queuedProgressSaves).length > 0) {
+        if (reading && backend.selectedContent)
+            saveCurrentProgress(true)
+        if (backend.busy || backend.progressBusy || backend.noteSyncBusy
+            || Object.keys(queuedProgressSaves).length > 0) {
             pendingCloseAfterProgress = true
             close.accepted = false
         }
@@ -34,6 +36,7 @@ ApplicationWindow {
     property bool showPalette: false
     property string pendingHighlightText: ""
     property string pendingHighlightDocumentId: ""
+    property string selectedHighlightCardId: ""
     property int activeParagraphIndex: -1
     property int keyboardSelectionAnchor: -1
     property int keyboardSelectionCursor: -1
@@ -146,6 +149,35 @@ ApplicationWindow {
         backend.saveDocumentTags(selectedDocument().id || "", tags)
     }
 
+    function highlightTagSuggestions(query, currentTags) {
+        const normalizedQuery = query.trim().toLowerCase()
+        const current = (currentTags || []).map(function(tag) { return String(tag).toLowerCase() })
+        const suggestions = backend.availableDocumentTags.filter(function(tag) {
+            return current.indexOf(tag.toLowerCase()) < 0
+                && (!normalizedQuery || tag.toLowerCase().indexOf(normalizedQuery) >= 0)
+        }).map(function(tag) { return ({ name: tag, create: false }) })
+        const known = backend.availableDocumentTags.some(function(tag) {
+            return tag.toLowerCase() === normalizedQuery
+        }) || current.indexOf(normalizedQuery) >= 0
+        if (normalizedQuery && !known)
+            suggestions.unshift({ name: query.trim(), create: true })
+        return suggestions
+    }
+
+    function addHighlightTag(highlightId, currentTags, tag) {
+        const value = tag.trim()
+        if (!value || (currentTags || []).some(function(existing) {
+            return String(existing).toLowerCase() === value.toLowerCase()
+        }))
+            return
+        backend.addHighlightTags(selectedDocument().id || "", highlightId, [value])
+    }
+
+    function removeHighlightTag(highlightId, currentTags, tag) {
+        if ((currentTags || []).some(function(existing) { return String(existing) === tag }))
+            backend.removeHighlightTags(selectedDocument().id || "", highlightId, [tag])
+    }
+
     function openSelected() {
         const doc = selectedDocument()
         if (doc.id) {
@@ -232,7 +264,7 @@ ApplicationWindow {
     }
 
     function maybeCloseAfterProgressSave() {
-        if (!backend.busy && !backend.progressBusy && pendingCloseAfterProgress
+        if (!backend.busy && !backend.progressBusy && !backend.noteSyncBusy && pendingCloseAfterProgress
             && Object.keys(queuedProgressSaves).length === 0) {
             pendingCloseAfterProgress = false
             allowWindowClose = true
@@ -541,6 +573,9 @@ ApplicationWindow {
             maybeCloseAfterProgressSave()
         }
         function onProgressBusyChanged() {
+            maybeCloseAfterProgressSave()
+        }
+        function onNoteSyncBusyChanged() {
             maybeCloseAfterProgressSave()
         }
         function onLocationChanged() {
@@ -1152,7 +1187,7 @@ ApplicationWindow {
                         TextEdit {
                             id: articleText
                             objectName: "articleText"
-                            text: backend.busy && backend.selectedContent.length === 0 ? qsTr("Loading document…") : backend.formattedMarkdown(backend.selectedContent, theme.accent, theme.readerStyle, theme.colors)
+                            text: backend.busy && backend.selectedContent.length === 0 ? qsTr("Loading document…") : backend.formattedMarkdown(backend.selectedContent, theme.accent, theme.readerStyle, theme.colors, backend.selectedHighlights)
                             textFormat: TextEdit.RichText
                             width: Math.min(articleFlickable.width, theme.readerStyle.contentWidth)
                             x: Math.max(0, (articleFlickable.width - width) / 2)
@@ -1234,8 +1269,12 @@ ApplicationWindow {
                             keyboardSelectionCursor = -1
                             pendingHighlightText = ""
                             pendingHighlightDocumentId = ""
+                            selectedHighlightCardId = ""
                             if (reading)
-                                Qt.callLater(function() { articleText.forceActiveFocus() })
+                                Qt.callLater(function() {
+                                    articleText.forceActiveFocus()
+                                    backend.loadHighlights()
+                                })
                         }
                     }
                     }
@@ -1390,17 +1429,60 @@ ApplicationWindow {
                             id: documentNoteEditor
                             objectName: "documentNoteEditor"
                             Layout.fillWidth: true
-                            Layout.preferredHeight: 72
-                            placeholderText: qsTr("Add a note about this document…")
+                            Layout.preferredHeight: 104
+                            leftPadding: 10
+                            rightPadding: 10
+                            topPadding: 12
+                            bottomPadding: 10
+                            placeholderText: ""
                             wrapMode: TextEdit.Wrap
                             selectByMouse: true
+                            background: Item {
+                                Rectangle {
+                                    anchors.fill: parent
+                                    color: theme.colors.panel
+                                    border.color: documentNoteEditor.activeFocus ? theme.accent : theme.colors.border
+                                    radius: 2
+                                }
+                                Text {
+                                    visible: documentNoteEditor.text.length === 0
+                                    anchors.left: parent.left
+                                    anchors.top: parent.top
+                                    anchors.leftMargin: 10
+                                    anchors.topMargin: 10
+                                    text: qsTr("Add a note about this document…")
+                                    color: theme.colors.textMuted
+                                    font.family: theme.uiFont
+                                    font.pixelSize: 10
+                                }
+                            }
                         }
-                        Button { Material.roundedScale: Material.NotRounded; font.family: theme.uiFont;
-                            text: qsTr("Save note")
-                            objectName: "saveDocumentNoteButton"
-                            enabled: !backend.busy
+                        RowLayout {
                             Layout.fillWidth: true
-                            onClicked: backend.saveDocumentNote(selectedDocument().id || "", documentNoteEditor.text)
+                            Text {
+                                text: documentNoteEditor.text !== backend.selectedNote
+                                    ? qsTr("Unsaved changes") : backend.noteSyncStatus
+                                color: backend.error.length > 0 ? theme.colors.error : theme.colors.textMuted
+                                font.family: theme.uiFont; font.pixelSize: 9
+                                wrapMode: Text.Wrap
+                                Layout.fillWidth: true
+                            }
+                            Button { Material.roundedScale: Material.NotRounded; font.family: theme.uiFont;
+                                text: qsTr("Clear")
+                                objectName: "clearDocumentNoteButton"
+                                visible: documentNoteEditor.text.length > 0
+                                onClicked: {
+                                    documentNoteEditor.clear()
+                                    backend.saveDocumentNote(selectedDocument().id || "", "")
+                                }
+                            }
+                            Button { Material.roundedScale: Material.NotRounded; font.family: theme.uiFont;
+                                text: qsTr("Save note")
+                                objectName: "saveDocumentNoteButton"
+                                Layout.minimumWidth: 96
+                                enabled: !!selectedDocument().id
+                                onClicked: backend.saveDocumentNote(selectedDocument().id || "", documentNoteEditor.text)
+                            }
                         }
                         Rectangle { Layout.fillWidth: true; height: 1; color: theme.colors.border }
                         RowLayout {
@@ -1418,47 +1500,89 @@ ApplicationWindow {
                                 required property var modelData
                                 property bool editingNote: false
                                 property bool editingTags: false
+                                property bool selected: window.selectedHighlightCardId === (modelData.id || "")
                                 Layout.fillWidth: true
                                 implicitHeight: highlightColumn.implicitHeight + 20
                                 color: theme.colors.surfaceAlt
-                                border.color: theme.colors.borderStrong
+                                border.color: selected ? theme.accent : theme.colors.borderStrong
                                 radius: Math.min(2, theme.radius)
+                                TapHandler { onTapped: window.selectedHighlightCardId = highlightCard.modelData.id || "" }
                                 ColumnLayout {
                                     id: highlightColumn
                                     anchors.fill: parent
                                     anchors.margins: 10
                                     spacing: 7
-                                    Text {
-                                        text: highlightCard.modelData.text || qsTr("Highlight")
-                                        color: theme.colors.text
-                                        font.family: theme.uiFont; font.pixelSize: 11
-                                        wrapMode: Text.Wrap
+                                    RowLayout {
                                         Layout.fillWidth: true
+                                        Text {
+                                            text: highlightCard.modelData.text || qsTr("Highlight")
+                                            color: theme.colors.text
+                                            font.family: theme.uiFont; font.pixelSize: 11
+                                            wrapMode: Text.Wrap
+                                            Layout.fillWidth: true
+                                        }
+                                        ToolButton {
+                                            objectName: "highlightActionsButton"
+                                            text: qsTr("⋮")
+                                            Accessible.name: qsTr("Highlight actions")
+                                            font.family: theme.uiFont; font.pixelSize: 18
+                                            visible: highlightCard.selected || highlightHover.hovered
+                                            onClicked: {
+                                                window.selectedHighlightCardId = highlightCard.modelData.id || ""
+                                                highlightActionsMenu.popup()
+                                            }
+                                            Menu {
+                                                id: highlightActionsMenu
+                                                objectName: "highlightActionsMenu"
+                                                MenuItem {
+                                                    objectName: "highlightEditNoteAction"
+                                                    text: highlightCard.editingNote ? qsTr("Close note editor") : qsTr("Edit note")
+                                                    onTriggered: {
+                                                        highlightNoteEditor.text = highlightCard.modelData.notes || ""
+                                                        highlightCard.editingNote = !highlightCard.editingNote
+                                                    }
+                                                }
+                                                MenuItem {
+                                                    objectName: "highlightRemoveNoteAction"
+                                                    text: qsTr("Remove note")
+                                                    enabled: !!highlightCard.modelData.notes
+                                                    onTriggered: backend.saveHighlightNote(selectedDocument().id || "", highlightCard.modelData.id || "", "")
+                                                }
+                                                MenuItem {
+                                                    objectName: "highlightEditTagsAction"
+                                                    text: highlightCard.editingTags ? qsTr("Done editing tags") : qsTr("Edit tags")
+                                                    onTriggered: highlightCard.editingTags = !highlightCard.editingTags
+                                                }
+                                            }
+                                        }
                                     }
-                                    Rectangle {
+                                    Button {
+                                        id: highlightNotePreviewCard
+                                        objectName: "highlightNotePreviewCard"
                                         Layout.fillWidth: true
                                         implicitHeight: Math.max(highlightNotePreview.implicitHeight + 20, 42)
-                                        radius: 3
-                                        color: theme.colors.panel
-                                        border.color: theme.colors.surfaceAlt
+                                        padding: 0
                                         visible: !highlightCard.editingNote
-                                        RowLayout {
-                                            anchors.fill: parent
-                                            anchors.margins: 10
-                                            Text {
-                                                id: highlightNotePreview
-                                                text: highlightCard.modelData.notes || qsTr("Add a note to this highlight…")
-                                                color: highlightCard.modelData.notes ? theme.colors.textSecondary : theme.colors.textMuted
-                                                font.family: theme.uiFont; font.pixelSize: 10
-                                                wrapMode: Text.Wrap
-                                                Layout.fillWidth: true
-                                            }
-                                            ToolButton {
-                                                text: highlightCard.modelData.notes ? qsTr("Edit") : qsTr("Add note")
-                                                font.family: theme.uiFont; font.pixelSize: 10
-                                                visible: highlightHover.hovered || highlightCard.editingNote
-                                                onClicked: { highlightNoteEditor.text = highlightCard.modelData.notes || ""; highlightCard.editingNote = true }
-                                            }
+                                        background: Rectangle {
+                                            color: theme.colors.panel
+                                            border.color: highlightNotePreviewCard.hovered ? theme.accent : theme.colors.surfaceAlt
+                                            radius: 3
+                                        }
+                                        contentItem: Text {
+                                            id: highlightNotePreview
+                                            leftPadding: 10
+                                            rightPadding: 10
+                                            topPadding: 9
+                                            bottomPadding: 9
+                                            text: highlightCard.modelData.notes || qsTr("Add a note to this highlight…")
+                                            color: highlightCard.modelData.notes ? theme.colors.textSecondary : theme.colors.textMuted
+                                            font.family: theme.uiFont; font.pixelSize: 10
+                                            wrapMode: Text.Wrap
+                                        }
+                                        onClicked: {
+                                            window.selectedHighlightCardId = highlightCard.modelData.id || ""
+                                            highlightNoteEditor.text = highlightCard.modelData.notes || ""
+                                            highlightCard.editingNote = true
                                         }
                                     }
                                     TextArea { Material.roundedScale: Material.NotRounded; font.family: theme.uiFont;
@@ -1468,19 +1592,52 @@ ApplicationWindow {
                                         visible: highlightCard.editingNote
                                         Layout.fillWidth: true
                                         Layout.preferredHeight: 86
-                                        placeholderText: qsTr("Add context or a thought about this passage…")
+                                        leftPadding: 10
+                                        rightPadding: 10
+                                        topPadding: 12
+                                        bottomPadding: 10
+                                        placeholderText: ""
                                         wrapMode: TextEdit.Wrap
                                         selectByMouse: true
+                                        background: Item {
+                                            Rectangle {
+                                                anchors.fill: parent
+                                                color: theme.colors.panel
+                                                border.color: highlightNoteEditor.activeFocus ? theme.accent : theme.colors.border
+                                                radius: 2
+                                            }
+                                            Text {
+                                                visible: highlightNoteEditor.text.length === 0
+                                                anchors.left: parent.left
+                                                anchors.right: parent.right
+                                                anchors.top: parent.top
+                                                anchors.leftMargin: 10
+                                                anchors.rightMargin: 10
+                                                anchors.topMargin: 9
+                                                text: qsTr("Add context or a thought about this passage…")
+                                                color: theme.colors.textMuted
+                                                font.family: theme.uiFont
+                                                font.pixelSize: 10
+                                                wrapMode: Text.Wrap
+                                            }
+                                        }
                                     }
                                     RowLayout {
                                         visible: highlightCard.editingNote
                                         Layout.fillWidth: true
-                                        Item { Layout.fillWidth: true }
+                                        Text {
+                                            text: highlightNoteEditor.text !== (highlightCard.modelData.notes || "")
+                                                ? qsTr("Unsaved changes") : backend.noteSyncStatus
+                                            color: backend.error.length > 0 ? theme.colors.error : theme.colors.textMuted
+                                            font.family: theme.uiFont; font.pixelSize: 9
+                                            wrapMode: Text.Wrap
+                                            Layout.fillWidth: true
+                                        }
                                         Button { Material.roundedScale: Material.NotRounded; font.family: theme.uiFont; text: qsTr("Cancel"); flat: true; onClicked: highlightCard.editingNote = false }
                                         Button { Material.roundedScale: Material.NotRounded; font.family: theme.uiFont;
                                             text: qsTr("Save note")
                                             objectName: "saveHighlightNoteButton"
-                                            enabled: !backend.busy
+                                            enabled: !!selectedDocument().id && !!highlightCard.modelData.id
                                             onClicked: {
                                                 backend.saveHighlightNote(selectedDocument().id || "", highlightCard.modelData.id || "", highlightNoteEditor.text)
                                                 highlightCard.editingNote = false
@@ -1489,20 +1646,52 @@ ApplicationWindow {
                                     }
                                     RowLayout {
                                         Layout.fillWidth: true
-                                        Text {
-                                            text: highlightCard.modelData.tags && highlightCard.modelData.tags.length > 0
-                                                ? qsTr("Tags: %1").arg(highlightCard.modelData.tags.join(", "))
-                                                : qsTr("No highlight tags")
-                                            color: theme.accent
-                                            font.family: theme.uiFont; font.pixelSize: 10
-                                            wrapMode: Text.Wrap
+                                        Flow {
                                             Layout.fillWidth: true
-                                        }
-                                        ToolButton {
-                                            text: highlightCard.editingTags ? qsTr("Done") : qsTr("Edit tags")
-                                            font.family: theme.uiFont; font.pixelSize: 10
-                                            visible: highlightHover.hovered || highlightCard.editingTags
-                                            onClicked: highlightCard.editingTags = !highlightCard.editingTags
+                                            spacing: 5
+                                            Repeater {
+                                                model: highlightCard.modelData.tags || []
+                                                delegate: Rectangle {
+                                                    required property string modelData
+                                                    width: highlightTagBadgeLabel.implicitWidth + (highlightTagBadgeRemove.visible ? 25 : 16)
+                                                    height: 23
+                                                    radius: 12
+                                                    color: theme.colors.tagBackground
+                                                    border.color: theme.colors.border
+                                                    Row {
+                                                        anchors.centerIn: parent
+                                                        spacing: 2
+                                                        Text {
+                                                            id: highlightTagBadgeLabel
+                                                            text: modelData
+                                                            color: theme.colors.textBright
+                                                            font.family: theme.uiFont
+                                                            font.pixelSize: 9
+                                                            anchors.verticalCenter: parent.verticalCenter
+                                                        }
+                                                        ToolButton {
+                                                            id: highlightTagBadgeRemove
+                                                            text: "×"
+                                                            visible: highlightTagBadgeHover.hovered
+                                                            width: visible ? 17 : 0
+                                                            height: 19
+                                                            padding: 0
+                                                            font.pixelSize: 14
+                                                            onClicked: removeHighlightTag(highlightCard.modelData.id || "", highlightCard.modelData.tags || [], modelData)
+                                                            ToolTip.visible: hovered
+                                                            ToolTip.text: qsTr("Remove %1").arg(modelData)
+                                                        }
+                                                    }
+                                                    HoverHandler { id: highlightTagBadgeHover }
+                                                }
+                                            }
+                                            Text {
+                                                visible: !highlightCard.modelData.tags || highlightCard.modelData.tags.length === 0
+                                                text: qsTr("No highlight tags")
+                                                color: theme.colors.textMuted
+                                                font.family: theme.uiFont
+                                                font.pixelSize: 10
+                                            }
                                         }
                                     }
                                     RowLayout {
@@ -1512,36 +1701,51 @@ ApplicationWindow {
                                             id: highlightTagEditor
                                             objectName: "highlightTagEditor"
                                             Layout.fillWidth: true
-                                            placeholderText: qsTr("Add a tag")
+                                            placeholderText: qsTr("Find or create a tag…")
                                             selectByMouse: true
+                                            onActiveFocusChanged: {
+                                                if (activeFocus)
+                                                    backend.loadDocumentTags()
+                                            }
+                                            onAccepted: {
+                                                addHighlightTag(highlightCard.modelData.id || "", highlightCard.modelData.tags || [], text)
+                                                clear()
+                                            }
                                         }
                                         Button { Material.roundedScale: Material.NotRounded; font.family: theme.uiFont;
                                             text: qsTr("Add")
                                             objectName: "addHighlightTagButton"
                                             enabled: !backend.busy && highlightTagEditor.text.trim().length > 0
                                             onClicked: {
-                                                backend.addHighlightTags(selectedDocument().id || "", highlightCard.modelData.id || "", [highlightTagEditor.text])
+                                                addHighlightTag(highlightCard.modelData.id || "", highlightCard.modelData.tags || [], highlightTagEditor.text)
                                                 highlightTagEditor.clear()
                                             }
                                         }
                                     }
-                                    RowLayout {
+                                    Flow {
                                         visible: highlightCard.editingTags
                                         Layout.fillWidth: true
-                                        TextField { Material.roundedScale: Material.NotRounded; font.family: theme.uiFont;
-                                            id: removeHighlightTagEditor
-                                            objectName: "removeHighlightTagEditor"
-                                            Layout.fillWidth: true
-                                            placeholderText: qsTr("Remove a tag")
-                                            selectByMouse: true
-                                        }
-                                        Button { Material.roundedScale: Material.NotRounded; font.family: theme.uiFont;
-                                            text: qsTr("Remove")
-                                            objectName: "removeHighlightTagButton"
-                                            enabled: !backend.busy && removeHighlightTagEditor.text.trim().length > 0
-                                            onClicked: {
-                                                backend.removeHighlightTags(selectedDocument().id || "", highlightCard.modelData.id || "", [removeHighlightTagEditor.text])
-                                                removeHighlightTagEditor.clear()
+                                        spacing: 4
+                                        Repeater {
+                                            model: highlightTagSuggestions(highlightTagEditor.text, highlightCard.modelData.tags || [])
+                                            delegate: ItemDelegate {
+                                                required property var modelData
+                                                height: 30
+                                                text: modelData.create
+                                                    ? qsTr("Create “%1”").arg(modelData.name)
+                                                    : modelData.name
+                                                font.family: theme.uiFont
+                                                font.pixelSize: 10
+                                                background: Rectangle {
+                                                    color: parent.hovered ? theme.colors.surfaceAlt : theme.colors.selection
+                                                    radius: 12
+                                                    border.color: theme.colors.border
+                                                }
+                                                onClicked: {
+                                                    addHighlightTag(highlightCard.modelData.id || "", highlightCard.modelData.tags || [], modelData.name)
+                                                    highlightTagEditor.clear()
+                                                    highlightTagEditor.forceActiveFocus()
+                                                }
                                             }
                                         }
                                     }

@@ -189,6 +189,18 @@ QString yamlQuotedString(const QString &value) {
 
 Backend::Backend(QObject *parent) : QObject(parent) {
     connect(&m_process, &QProcess::finished, this, &Backend::finish);
+    connect(&m_noteProcess, &QProcess::finished, this, &Backend::finishNoteWrite);
+    connect(&m_noteProcess, &QProcess::errorOccurred, this, [this](QProcess::ProcessError error) {
+        if (error != QProcess::FailedToStart)
+            return;
+        m_noteTimeout.stop();
+        const QString message = tr("Could not start the Readwise CLI to sync notes.");
+        setNoteSyncStatus(message);
+        setStatus(message);
+        fail(message);
+        m_activeNoteWrite = {};
+        startNextNoteWrite();
+    });
     connect(&m_documentTagsProcess, &QProcess::finished, this,
             [this](int exitCode, QProcess::ExitStatus exitStatus) {
         m_documentTagsInProgress = false;
@@ -252,6 +264,14 @@ Backend::Backend(QObject *parent) : QObject(parent) {
         } else if (m_progressProcess.state() != QProcess::NotRunning) {
             m_progressTimedOut = true;
             m_progressProcess.kill();
+        }
+    });
+    m_noteTimeout.setSingleShot(true);
+    m_noteTimeout.setInterval(30000);
+    connect(&m_noteTimeout, &QTimer::timeout, this, [this] {
+        if (m_noteProcess.state() != QProcess::NotRunning) {
+            m_noteTimedOut = true;
+            m_noteProcess.kill();
         }
     });
     connect(&m_progressProcess, &QProcess::finished, this,
@@ -985,6 +1005,125 @@ void Backend::setMetadataBusy(bool busy) {
     emit metadataBusyChanged();
 }
 
+void Backend::setNoteSyncBusy(bool busy) {
+    if (m_noteSyncBusy == busy)
+        return;
+    m_noteSyncBusy = busy;
+    emit noteSyncBusyChanged();
+}
+
+void Backend::setNoteSyncStatus(const QString &status) {
+    if (m_noteSyncStatus == status)
+        return;
+    m_noteSyncStatus = status;
+    emit noteSyncStatusChanged();
+}
+
+void Backend::enqueueNoteWrite(const QString &key, const QStringList &arguments) {
+    for (int i = 0; i < m_noteWriteQueue.size(); ++i) {
+        if (m_noteWriteQueue.at(i).key == key) {
+            m_noteWriteQueue[i].arguments = arguments;
+            setNoteSyncBusy(true);
+            setNoteSyncStatus(tr("Saved here · syncing to Readwise…"));
+            startNextNoteWrite();
+            return;
+        }
+    }
+    m_noteWriteQueue.enqueue({key, arguments});
+    setNoteSyncBusy(true);
+    setNoteSyncStatus(tr("Saved here · syncing to Readwise…"));
+    startNextNoteWrite();
+}
+
+void Backend::startNextNoteWrite() {
+    if (m_noteProcess.state() != QProcess::NotRunning)
+        return;
+    if (m_noteWriteQueue.isEmpty()) {
+        m_activeNoteWrite = {};
+        setNoteSyncBusy(false);
+        if (!m_noteSyncStatus.startsWith(tr("Could not"))
+            && !m_noteSyncStatus.startsWith(tr("Note sync failed")))
+            setNoteSyncStatus(tr("All note changes synced"));
+        return;
+    }
+    const QString executable = QStandardPaths::findExecutable(QStringLiteral("readwise"));
+    if (executable.isEmpty()) {
+        m_noteWriteQueue.clear();
+        const QString message = tr("Readwise CLI not found. Note changes are saved locally but could not be synced.");
+        setNoteSyncBusy(false);
+        setNoteSyncStatus(message);
+        setStatus(message);
+        fail(message);
+        return;
+    }
+    m_activeNoteWrite = m_noteWriteQueue.dequeue();
+    setNoteSyncStatus(tr("Saved here · syncing to Readwise…"));
+    m_noteTimedOut = false;
+    m_noteProcess.setProgram(executable);
+    m_noteProcess.setArguments(m_activeNoteWrite.arguments);
+    m_noteProcess.setProcessChannelMode(QProcess::SeparateChannels);
+    m_noteProcess.start();
+    m_noteTimeout.start();
+}
+
+void Backend::finishNoteWrite(int exitCode, QProcess::ExitStatus exitStatus) {
+    m_noteTimeout.stop();
+    const QByteArray output = m_noteProcess.readAllStandardOutput();
+    const QString standardError = QString::fromUtf8(m_noteProcess.readAllStandardError()).trimmed();
+    QString failure;
+    if (m_noteTimedOut) {
+        m_noteTimedOut = false;
+        failure = tr("The Readwise CLI timed out while syncing notes.");
+    } else if (exitStatus != QProcess::NormalExit || exitCode != 0) {
+        failure = standardError.isEmpty()
+            ? tr("Readwise CLI exited with code %1 while syncing notes.").arg(exitCode)
+            : standardError;
+    } else {
+        QJsonParseError parseError;
+        const QJsonValue response = QJsonValue::fromJson(output, &parseError);
+        if (parseError.error != QJsonParseError::NoError) {
+            if (!output.trimmed().isEmpty())
+                failure = tr("Readwise returned an invalid response while syncing notes.");
+        } else if (response.isObject()) {
+            const QJsonObject root = response.toObject();
+            failure = root.value(QStringLiteral("error")).toString();
+            if (failure.isEmpty() && root.value(QStringLiteral("success")).isBool()
+                && !root.value(QStringLiteral("success")).toBool())
+                failure = root.value(QStringLiteral("message")).toString(tr("Readwise could not save the note."));
+            if (failure.isEmpty() && root.value(QStringLiteral("results")).isArray()) {
+                for (const QJsonValue &value : root.value(QStringLiteral("results")).toArray()) {
+                    const QJsonObject result = value.toObject();
+                    if (result.value(QStringLiteral("success")).isBool()
+                        && !result.value(QStringLiteral("success")).toBool()) {
+                        failure = result.value(QStringLiteral("error")).toString(
+                            tr("Readwise could not save the note."));
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    m_activeNoteWrite = {};
+    if (!failure.isEmpty()) {
+        const QString message = tr("Note sync failed: %1").arg(failure);
+        setNoteSyncStatus(message);
+        setStatus(message);
+        fail(failure);
+        if (m_authenticationRequired)
+            setCliSignedIn(false);
+    } else {
+        clearError();
+        setCliSignedIn(true);
+        if (m_noteWriteQueue.isEmpty()) {
+            setNoteSyncStatus(tr("All note changes synced"));
+            setStatus(tr("Note saved"));
+        } else {
+            setNoteSyncStatus(tr("Saved here · syncing to Readwise…"));
+        }
+    }
+    startNextNoteWrite();
+}
+
 void Backend::setStatus(const QString &status) {
     if (m_status == status)
         return;
@@ -1291,10 +1430,21 @@ void Backend::saveDocumentNote(const QString &id, const QString &note) {
     QJsonArray documents;
     documents.append(document);
     const QString payload = QString::fromUtf8(QJsonDocument(documents).toJson(QJsonDocument::Compact));
-    m_pendingId = id;
-    m_pendingNote = note;
-    setStatus(tr("Saving note…"));
-    run({"--json", "reader-bulk-edit-document-metadata", "--documents", payload}, Operation::SaveNote);
+    if (id == m_selectedId)
+        m_selectedNote = note;
+    for (QVariantList *rows : {&m_documents, &m_libraryDocuments}) {
+        for (QVariant &rowValue : *rows) {
+            QVariantMap row = rowValue.toMap();
+            if (row.value(QStringLiteral("id")).toString() == id) {
+                row.insert(QStringLiteral("notes"), note);
+                rowValue = row;
+            }
+        }
+    }
+    clearError();
+    setStatus(tr("Note saved here · syncing to Readwise…"));
+    enqueueNoteWrite(QStringLiteral("document:") + id,
+                     {"--json", "reader-bulk-edit-document-metadata", "--documents", payload});
 }
 
 void Backend::saveDocumentTags(const QString &id, const QStringList &tags) {
@@ -1346,14 +1496,22 @@ void Backend::createHighlight(const QString &documentId, const QString &text) {
 void Backend::saveHighlightNote(const QString &documentId, const QString &highlightId, const QString &note) {
     if (documentId.isEmpty() || highlightId.isEmpty() || documentId != m_selectedId)
         return;
-    if (refreshHighlightsBeforeEdit(documentId, highlightId, PendingHighlightEdit::SaveNote, note))
-        return;
-    m_pendingId = documentId;
-    m_pendingHighlightId = highlightId;
-    m_pendingHighlightNote = note;
-    setStatus(tr("Saving highlight note…"));
-    run({"--json", "reader-set-highlight-notes", "--document-id", documentId,
-         "--highlight-document-id", highlightId, "--notes", note}, Operation::SaveHighlightNote);
+    for (QVariant &value : m_selectedHighlights) {
+        QVariantMap highlight = value.toMap();
+        if (highlight.value(QStringLiteral("id")).toString() == highlightId) {
+            highlight.insert(QStringLiteral("notes"), note);
+            value = highlight;
+            break;
+        }
+    }
+    m_highlightsCache.insert(documentId, m_selectedHighlights);
+    m_highlightsLoaded.insert(documentId);
+    emit selectedHighlightsChanged();
+    clearError();
+    setStatus(tr("Highlight note saved here · syncing to Readwise…"));
+    enqueueNoteWrite(QStringLiteral("highlight:") + documentId + QLatin1Char(':') + highlightId,
+                     {"--json", "reader-set-highlight-notes", "--document-id", documentId,
+                      "--highlight-document-id", highlightId, "--notes", note});
 }
 
 void Backend::addHighlightTags(const QString &documentId, const QString &highlightId, const QStringList &tags) {
@@ -1374,7 +1532,7 @@ void Backend::addHighlightTags(const QString &documentId, const QString &highlig
     }
     if (cleaned.isEmpty())
         return;
-    if (refreshHighlightsBeforeEdit(documentId, highlightId, PendingHighlightEdit::AddTags, {}, cleaned))
+    if (refreshHighlightsBeforeEdit(documentId, highlightId, PendingHighlightEdit::AddTags, cleaned))
         return;
     QJsonArray payload = QJsonArray::fromStringList(cleaned);
     m_pendingId = documentId;
@@ -1397,7 +1555,7 @@ void Backend::removeHighlightTags(const QString &documentId, const QString &high
     }
     if (cleaned.isEmpty())
         return;
-    if (refreshHighlightsBeforeEdit(documentId, highlightId, PendingHighlightEdit::RemoveTags, {}, cleaned))
+    if (refreshHighlightsBeforeEdit(documentId, highlightId, PendingHighlightEdit::RemoveTags, cleaned))
         return;
     const QJsonArray payload = QJsonArray::fromStringList(cleaned);
     m_pendingId = documentId;
@@ -1410,15 +1568,13 @@ void Backend::removeHighlightTags(const QString &documentId, const QString &high
 }
 
 bool Backend::refreshHighlightsBeforeEdit(const QString &documentId, const QString &highlightId,
-                                          PendingHighlightEdit edit, const QString &note,
-                                          const QStringList &tags) {
+                                          PendingHighlightEdit edit, const QStringList &tags) {
     if (m_dispatchingFreshHighlightEdit) {
         m_dispatchingFreshHighlightEdit = false;
         return false;
     }
     m_pendingHighlightEdit = edit;
     m_pendingHighlightId = highlightId;
-    m_pendingHighlightNote = note;
     m_pendingHighlightTags = tags;
     m_highlightsLoaded.remove(documentId);
     m_highlightsCache.remove(documentId);
@@ -1475,12 +1631,9 @@ void Backend::processQueuedWork() {
         const PendingHighlightEdit edit = m_pendingHighlightEdit;
         const QString documentId = m_selectedId;
         const QString highlightId = m_pendingHighlightId;
-        const QString note = m_pendingHighlightNote;
         const QStringList tags = m_pendingHighlightTags;
         m_pendingHighlightEdit = PendingHighlightEdit::None;
-        if (edit == PendingHighlightEdit::SaveNote)
-            saveHighlightNote(documentId, highlightId, note);
-        else if (edit == PendingHighlightEdit::AddTags)
+        if (edit == PendingHighlightEdit::AddTags)
             addHighlightTags(documentId, highlightId, tags);
         else if (edit == PendingHighlightEdit::RemoveTags)
             removeHighlightTags(documentId, highlightId, tags);
@@ -1681,7 +1834,8 @@ bool Backend::openArticleInEditor(const QString &editorId, const QString &conten
 
 QString Backend::formattedMarkdown(const QString &markdown, const QString &accent,
                                   const QVariantMap &readerStyle,
-                                  const QVariantMap &themeColors) const {
+                                  const QVariantMap &themeColors,
+                                  const QVariantList &highlights) const {
     const QString fontFamily = readerStyle.value("fontFamily", "monospace").toString();
     const int fontSizePx = qBound(12, readerStyle.value("fontSizePx", 12).toInt(), 48);
     const double lineSpacing = qBound(1.0, readerStyle.value("lineSpacing", 1.2).toDouble(), 2.2);
@@ -1747,6 +1901,64 @@ QString Backend::formattedMarkdown(const QString &markdown, const QString &accen
         }
         QTextCursor cursor(block);
         cursor.setBlockFormat(format);
+    }
+    // Reader marks saved passages with a subdued olive fill and a fine underline.
+    // Match against QTextDocument's plain text so highlights work for Markdown and HTML.
+    const QString plainText = document.toPlainText();
+    const auto normalizeWhitespace = [](const QString &text, QVector<qsizetype> *positions) {
+        QString normalized;
+        bool inWhitespace = false;
+        for (qsizetype i = 0; i < text.size(); ++i) {
+            if (text.at(i).isSpace()) {
+                if (!inWhitespace) {
+                    normalized.append(QLatin1Char(' '));
+                    if (positions) positions->append(i);
+                }
+                inWhitespace = true;
+            } else {
+                normalized.append(text.at(i));
+                if (positions) positions->append(i);
+                inWhitespace = false;
+            }
+        }
+        qsizetype first = 0;
+        while (first < normalized.size() && normalized.at(first).isSpace())
+            ++first;
+        qsizetype last = normalized.size();
+        while (last > first && normalized.at(last - 1).isSpace())
+            --last;
+        if (positions) {
+            if (first > 0)
+                positions->remove(0, first);
+            if (positions->size() > last - first)
+                positions->resize(last - first);
+        }
+        return normalized.mid(first, last - first);
+    };
+    QVector<qsizetype> articlePositions;
+    const QString normalizedArticle = normalizeWhitespace(plainText, &articlePositions);
+    QTextCharFormat highlightFormat;
+    highlightFormat.setBackground(QColor(QStringLiteral("#4b481f")));
+    highlightFormat.setUnderlineStyle(QTextCharFormat::SingleUnderline);
+    highlightFormat.setUnderlineColor(QColor(QStringLiteral("#c6bd32")));
+    for (const QVariant &value : highlights) {
+        const QString passage = value.toMap().value(QStringLiteral("text")).toString().trimmed();
+        if (passage.isEmpty())
+            continue;
+        const QString normalizedPassage = normalizeWhitespace(passage, nullptr);
+        if (normalizedPassage.isEmpty())
+            continue;
+        qsizetype from = 0;
+        while ((from = normalizedArticle.indexOf(normalizedPassage, from, Qt::CaseInsensitive)) >= 0) {
+            const qsizetype last = from + normalizedPassage.size() - 1;
+            if (last < articlePositions.size()) {
+                QTextCursor cursor(&document);
+                cursor.setPosition(articlePositions.at(from));
+                cursor.setPosition(articlePositions.at(last) + 1, QTextCursor::KeepAnchor);
+                cursor.mergeCharFormat(highlightFormat);
+            }
+            from += normalizedPassage.size();
+        }
     }
     const QString html = document.toHtml();
     const QRegularExpression anchorExpression(QStringLiteral("<a\\s+href=\"([^\"]*)\">(.*?)</a>"),
@@ -2123,8 +2335,8 @@ void Backend::finish(int exitCode, QProcess::ExitStatus exitStatus) {
                 setCliSignedIn(false);
             return;
         }
-        if ((operation == Operation::SaveNote || operation == Operation::SaveTags
-             || operation == Operation::CreateHighlight || operation == Operation::SaveHighlightNote
+        if ((operation == Operation::SaveTags
+             || operation == Operation::CreateHighlight
              || operation == Operation::AddHighlightTags || operation == Operation::RemoveHighlightTags
              || operation == Operation::SetSeen
              || operation == Operation::SaveUrl)
@@ -2136,8 +2348,8 @@ void Backend::finish(int exitCode, QProcess::ExitStatus exitStatus) {
                      : root.value("message").toString());
             return;
         }
-        if ((operation == Operation::SaveNote || operation == Operation::SaveTags
-             || operation == Operation::CreateHighlight || operation == Operation::SaveHighlightNote
+        if ((operation == Operation::SaveTags
+             || operation == Operation::CreateHighlight
              || operation == Operation::AddHighlightTags || operation == Operation::RemoveHighlightTags
              || operation == Operation::SetSeen
              || operation == Operation::SaveUrl)
@@ -2146,7 +2358,6 @@ void Backend::finish(int exitCode, QProcess::ExitStatus exitStatus) {
                 const QJsonObject result = value.toObject();
                 if (!result.value("success").isBool() || result.value("success").toBool())
                     continue;
-                m_pendingNote.clear();
                 m_pendingTags.clear();
                 setStatus(tr("Readwise update failed"));
                 fail(result.value("error").toString().isEmpty()
@@ -2344,13 +2555,6 @@ void Backend::finish(int exitCode, QProcess::ExitStatus exitStatus) {
         setStatus(m_pendingSeen ? tr("Document marked seen") : tr("Document marked unseen"));
         m_pendingId.clear();
         break;
-    case Operation::SaveNote:
-        m_selectedNote = m_pendingNote;
-        m_pendingNote.clear();
-        updateDocumentRows("notes", m_selectedNote);
-        emit selectedDocumentChanged();
-        setStatus(tr("Note saved"));
-        break;
     case Operation::SaveTags:
         m_selectedTags = m_pendingTags;
         m_pendingTags.clear();
@@ -2383,23 +2587,6 @@ void Backend::finish(int exitCode, QProcess::ExitStatus exitStatus) {
         loadHighlights();
         break;
         }
-    case Operation::SaveHighlightNote: {
-        QVariantList updated;
-        for (const QVariant &value : m_selectedHighlights) {
-            QVariantMap highlight = value.toMap();
-            if (highlight.value("id").toString() == m_pendingHighlightId)
-                highlight.insert("notes", m_pendingHighlightNote);
-            updated.append(highlight);
-        }
-        m_selectedHighlights = updated;
-        m_highlightsCache.insert(m_selectedId, m_selectedHighlights);
-        m_highlightsLoaded.insert(m_selectedId);
-        m_pendingHighlightId.clear();
-        m_pendingHighlightNote.clear();
-        emit selectedHighlightsChanged();
-        setStatus(tr("Highlight note saved"));
-        break;
-    }
     case Operation::AddHighlightTags:
     case Operation::RemoveHighlightTags: {
         QVariantList updated;
