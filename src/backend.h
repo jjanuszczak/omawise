@@ -7,6 +7,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QHash>
+#include <QQueue>
 #include <QObject>
 #include <QSet>
 #include <QStringList>
@@ -21,6 +22,8 @@ class Backend : public QObject {
     Q_PROPERTY(bool busy READ busy NOTIFY busyChanged)
     Q_PROPERTY(bool progressBusy READ progressBusy NOTIFY progressBusyChanged)
     Q_PROPERTY(bool metadataBusy READ metadataBusy NOTIFY metadataBusyChanged)
+    Q_PROPERTY(bool noteSyncBusy READ noteSyncBusy NOTIFY noteSyncBusyChanged)
+    Q_PROPERTY(QString noteSyncStatus READ noteSyncStatus NOTIFY noteSyncStatusChanged)
     Q_PROPERTY(QString error READ error NOTIFY errorChanged)
     Q_PROPERTY(bool authenticationRequired READ authenticationRequired NOTIFY authenticationRequiredChanged)
     Q_PROPERTY(bool cliConnectionKnown READ cliConnectionKnown NOTIFY cliConnectionStateChanged)
@@ -53,6 +56,8 @@ public:
     bool busy() const { return m_busy; }
     bool progressBusy() const { return m_progressBusy; }
     bool metadataBusy() const { return m_metadataBusy; }
+    bool noteSyncBusy() const { return m_noteSyncBusy; }
+    QString noteSyncStatus() const { return m_noteSyncStatus; }
     QString error() const { return m_error; }
     bool authenticationRequired() const { return m_authenticationRequired; }
     bool cliConnectionKnown() const { return m_cliConnectionKnown; }
@@ -110,7 +115,8 @@ public:
                                          const QVariantMap &metadata);
     Q_INVOKABLE QString formattedMarkdown(const QString &markdown, const QString &accent,
                                           const QVariantMap &readerStyle = {},
-                                          const QVariantMap &themeColors = {}) const;
+                                          const QVariantMap &themeColors = {},
+                                          const QVariantList &highlights = {}) const;
     Q_INVOKABLE bool copyArticleMarkdown(const QString &content, const QVariantMap &metadata);
     Q_INVOKABLE bool copyDocumentUrl(const QString &url);
 
@@ -120,6 +126,8 @@ signals:
     void busyChanged();
     void progressBusyChanged();
     void metadataBusyChanged();
+    void noteSyncBusyChanged();
+    void noteSyncStatusChanged();
     void errorChanged();
     void authenticationRequiredChanged();
     void cliConnectionStateChanged();
@@ -134,8 +142,9 @@ signals:
     void pendingMoveLocationChanged();
 
 private:
-    enum class Operation { None, List, ListMore, Search, TitleSearch, Detail, ApiDetail, ValidateApiToken, Highlights, Archive, Move, SaveUrl, SetSeen, SaveNote, SaveTags, CreateHighlight, SaveHighlightNote, AddHighlightTags, RemoveHighlightTags, Login };
-    enum class PendingHighlightEdit { None, SaveNote, AddTags, RemoveTags };
+    enum class Operation { None, List, ListMore, Search, TitleSearch, Detail, ApiDetail, ValidateApiToken, Highlights, Archive, Move, SaveUrl, SetSeen, SaveTags, CreateHighlight, AddHighlightTags, RemoveHighlightTags, Login };
+    enum class PendingHighlightEdit { None, AddTags, RemoveTags };
+    struct NoteWrite { QString key; QStringList arguments; };
     void run(const QStringList &arguments, Operation operation);
     void runApiGet(const QUrl &url, Operation operation, const QString &token = {});
     void queueProgressWrite(const QString &id, int progress);
@@ -156,12 +165,16 @@ private:
     void fail(const QString &message);
     void setBusy(bool busy);
     void setMetadataBusy(bool busy);
+    void setNoteSyncBusy(bool busy);
+    void setNoteSyncStatus(const QString &status);
+    void enqueueNoteWrite(const QString &key, const QStringList &arguments);
+    void startNextNoteWrite();
+    void finishNoteWrite(int exitCode, QProcess::ExitStatus exitStatus);
     void setStatus(const QString &status);
     void updateDocumentRows(const QString &key, const QVariant &value, const QString &id = {});
     void processQueuedWork();
     bool refreshHighlightsBeforeEdit(const QString &documentId, const QString &highlightId,
-                                     PendingHighlightEdit edit, const QString &note = {},
-                                     const QStringList &tags = {});
+                                     PendingHighlightEdit edit, const QStringList &tags = {});
     QString persistentArticleCachePath(const QString &id) const;
     QString readPersistentArticle(const QString &id);
     void writePersistentArticle(const QString &id, const QString &content);
@@ -179,11 +192,13 @@ private:
     QProcess m_process;
     QProcess m_progressProcess;
     QProcess m_documentTagsProcess;
+    QProcess m_noteProcess;
     QNetworkAccessManager m_network;
     QNetworkReply *m_apiReply = nullptr;
     QNetworkReply *m_progressReply = nullptr;
     QTimer m_timeout;
     QTimer m_progressTimeout;
+    QTimer m_noteTimeout;
     Operation m_operation = Operation::None;
     QVariantList m_documents;
     QVariantList m_libraryDocuments;
@@ -192,6 +207,8 @@ private:
     bool m_progressBusy = false;
     bool m_progressTimedOut = false;
     bool m_metadataBusy = false;
+    bool m_noteSyncBusy = false;
+    bool m_noteTimedOut = false;
     bool m_timedOut = false;
     bool m_authenticationRequired = false;
     bool m_cliConnectionKnown = false;
@@ -205,6 +222,7 @@ private:
     QString m_pendingApiToken;
     QString m_apiLoginError;
     QString m_status;
+    QString m_noteSyncStatus;
     QString m_selectedTitle;
     QString m_selectedAuthor;
     QString m_selectedContent;
@@ -235,10 +253,10 @@ private:
     QStringList m_queuedOpenTags;
     QString m_queuedOpenNote;
     QString m_pendingLocation;
-    QString m_pendingNote;
+    QQueue<NoteWrite> m_noteWriteQueue;
+    NoteWrite m_activeNoteWrite;
     QStringList m_pendingTags;
     QString m_pendingHighlightId;
-    QString m_pendingHighlightNote;
     QStringList m_pendingHighlightTags;
     PendingHighlightEdit m_pendingHighlightEdit = PendingHighlightEdit::None;
     bool m_dispatchingFreshHighlightEdit = false;
